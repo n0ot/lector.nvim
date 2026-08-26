@@ -361,7 +361,7 @@ assert(lector.setup({
   announce_cursor = false,
   announce_deletions = false,
   announce_diagnostics = false,
-  announce_modes = false,
+  announce_modes = true,
   announce_messages = false,
   announce_floating_windows = true,
   announce_command_line = false,
@@ -376,6 +376,16 @@ equal(
   semantic_speech(),
   "buffer entry announces its name without reading the current line"
 )
+
+vim.api.nvim_win_set_cursor(0, { 1, 2 })
+clear()
+vim.api.nvim_exec_autocmds("ModeChanged", { pattern = "n:v", modeline = false })
+equal(
+  { "visual" },
+  speech(),
+  "entering characterwise Visual mode does not repeat the current character"
+)
+vim.api.nvim_exec_autocmds("ModeChanged", { pattern = "v:n", modeline = false })
 
 clear()
 local hover_buffer = vim.api.nvim_create_buf(false, true)

@@ -101,9 +101,30 @@ equal({ "two" }, semantic_text(), "linewise deletion reads the line under the re
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { "foo bar baz" })
 vim.api.nvim_win_set_cursor(0, { 1, 4 })
 clear()
+local original_get_mode = vim.api.nvim_get_mode
+local simulated_mode = "n"
+vim.api.nvim_get_mode = function()
+  return { mode = simulated_mode, blocking = false }
+end
+input_listener("d")
+simulated_mode = "o"
+input_listener("a")
+input_listener("w")
+vim.api.nvim_get_mode = original_get_mode
 vim.cmd("normal! daw")
 vim.wait(10)
-equal({ "b" }, semantic_text(), "operator deletion reads the resulting cursor character")
+equal({ "baz" }, semantic_text(), "word-object deletion reads the resulting cursor word")
+
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "abc" })
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+clear()
+vim.cmd("normal! vld")
+vim.wait(10)
+equal(
+  { "c" },
+  semantic_text(),
+  "characterwise Visual deletion reads only the resulting cursor character"
+)
 
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { "one", "two", "three" })
 vim.api.nvim_win_set_cursor(0, { 1, 0 })
@@ -246,18 +267,35 @@ vim.api.nvim_win_set_cursor(0, { 1, 0 })
 vim.api.nvim_exec_autocmds("BufEnter", { buffer = 0, modeline = false })
 vim.wait(10)
 clear()
+input_listener("]")
+input_listener("s")
 vim.api.nvim_win_set_cursor(0, { 1, 4 })
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
 equal(
-  { "misspelled, quik" },
+  { "quik" },
   speech(),
-  "entering a visually spellchecked word does not repeat the word"
+  "a bracket spelling motion announces its destination word"
 )
 clear()
 vim.api.nvim_win_set_cursor(0, { 1, 5 })
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
 equal({ "u" }, speech(), "movement within the same misspelling does not repeat its status")
 vim.wo.spell = false
+
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "first", "second" })
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.api.nvim_exec_autocmds("BufEnter", { buffer = 0, modeline = false })
+vim.wait(10)
+clear()
+input_listener("]")
+input_listener("c")
+vim.api.nvim_win_set_cursor(0, { 2, 0 })
+vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+equal(
+  { "second" },
+  semantic_text(),
+  "a generic bracket command tracks its resulting line motion"
+)
 
 clear()
 vim.cmd("normal! qq")

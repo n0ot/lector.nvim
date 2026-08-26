@@ -157,6 +157,66 @@ def main() -> int:
 
             session.send(b"gg0")
             session.clear()
+            session.send(b"v")
+            session.wait_for_event("visual")
+            session.pump(0.2)
+            if "o" in session.events:
+                raise AssertionError(
+                    f"Visual entry repeated the cursor character: {session.events!r}"
+                )
+            session.send(b"\x1b")
+
+            session.send(b"gg0")
+            session.send(b"vl")
+            session.clear()
+            session.send(b"d")
+            session.wait_for_event("e")
+            semantic = [event for event in session.events if event not in {
+                "end", "set;auto=0;cursor=0"
+            }]
+            if semantic != ["e"]:
+                raise AssertionError(
+                    f"Visual deletion had competing speech: {session.events!r}"
+                )
+            session.send(b"u")
+
+            session.send(b"GoThe quik fox meets zzzzword\x1b")
+            session.send(b":setlocal spell spelllang=en_us\r")
+            session.send(b"0")
+            session.send(b":nnoremap s ]s\r")
+            session.clear()
+            session.send(b"s")
+            session.wait_for_event("quik")
+            session.send(b":nunmap s\r")
+            session.clear()
+            session.send(b"]s")
+            session.wait_for_event("zzzzword")
+            session.clear()
+            session.send(b"[s")
+            session.wait_for_event("quik")
+            session.send(b":setlocal nospell\rdd")
+
+            session.send(b"Goalpha beta gamma\x1b")
+            session.send(b"0w")
+            session.send(b":nnoremap Q daw\r")
+            session.clear()
+            session.send(b"Q")
+            session.wait_for_event("gamma")
+            if "g" in session.events:
+                raise AssertionError(f"word deletion announced only a character: {session.events!r}")
+            session.send(b":nunmap Q\r")
+            session.send(b":nnoremap Q s\r")
+            session.clear()
+            session.send(b"Q")
+            session.wait_for_event("a")
+            session.send(b"\x1bu:nunmap Q\r")
+            session.clear()
+            session.send(b"x")
+            session.wait_for_event("a")
+            session.send(b"uudd")
+
+            session.send(b"gg0")
+            session.clear()
             session.send(b"dw")
             session.wait_for_event("blank")
             if session.events.count("blank") != 1:

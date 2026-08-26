@@ -49,8 +49,9 @@ The plugin does not define key mappings.
 
 - Buffer names on entry, cursor motions, editor modes, indentation changes,
   and Visual selections
-- Resulting cursor destinations after deletions, put summaries, numeric
-  changes, folds, searches, spelling errors, and macro recording
+- Character, word, or line destinations after matching deletion units, put
+  summaries, numeric changes, folds, searches, spelling errors, and macro
+  recording
 - Diagnostics, messages, quickfix and location-list entries, command-line
   editing, native completion, and optional Blink completion details
 - Informational floating windows, native context menus, and terminal-buffer

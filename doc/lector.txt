@@ -74,11 +74,16 @@ announce_buffers
         separate cursor-motion behavior.
 
 announce_cursor
-        Announce semantic character, word, WORD, and line destinations.
+        Announce semantic character, word, WORD, and line destinations,
+        including bracket-prefixed motions. Entering characterwise Visual mode
+        announces the mode without repeating the character at the cursor.
 
 announce_deletions
         Announce where the cursor lands after Insert deletions and structured
-        operator edits. Deleted contents are not spoken.
+        operator edits. The destination is read as a character for
+        characterwise edits, a word for word motions and text objects, or a
+        line for linewise edits. A characterwise Visual deletion reads its
+        resulting character. Deleted contents are not spoken.
 
 announce_diagnostics
         Announce changed diagnostics when entering or revisiting a diagnosed
@@ -139,9 +144,11 @@ stream. Character motions read characters, word motions read words or WORDs,
 and vertical motions read structured lines. Opaque mappings and programmatic
 cursor changes safely use a geometric fallback.
 
-Operator edit destinations use |TextYankPost|. Put announcements use
-|TextPutPost| when available and a change-verified keyboard fallback
-otherwise. Fold, search,
+Operator edit destinations use |TextYankPost|, including its Visual and
+register-type metadata. Semantic input tracking uses the mapping-expanded
+command input supplied by |vim.on_key()|, not the physical key. Put
+announcements use |TextPutPost| when available and a change-verified keyboard
+fallback otherwise. Fold, search,
 quickfix, recording, spelling, diagnostic, command-line, message, and window
 state come from documented Neovim APIs and events.
 
