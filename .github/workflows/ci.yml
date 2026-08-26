@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Neovim nightly
+        uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1
+        with:
+          version: nightly
+          neovim: true
+
+      - name: Run headless and PTY tests
+        run: ./scripts/test
+
+      - name: Validate help tags
+        run: nvim --headless -u NONE -i NONE -n "+helptags doc" +qa!

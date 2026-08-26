@@ -1,0 +1,187 @@
+*lector.nvim.txt*        Semantic Neovim accessibility
+
+==============================================================================
+CONTENTS                                                    *lector.nvim*
+
+1. Introduction                                      |lector-introduction|
+2. Setup                                                    |lector-setup|
+3. Commands                                              |lector-commands|
+4. Options                                                |lector-options|
+5. Behavior                                              |lector-behavior|
+6. Completion API                                 |lector-completion-api|
+7. Compatibility                                  |lector-compatibility|
+
+==============================================================================
+1. Introduction                                      *lector-introduction*
+
+lector.nvim sends semantic editor information through the versioned Lector
+application-accessibility protocol. Lector and compatible terminal screen
+readers can use it instead of inferring full-screen editor behavior from
+terminal cells and cursor motion.
+
+The plugin does not define mappings or replace Neovim's visual UI. It yields to
+ordinary terminal reading for transient output, nested terminal applications,
+and terminal buffers.
+
+==============================================================================
+2. Setup                                                    *lector-setup*
+
+Add n0ot/lector.nvim to 'runtimepath', then call: >lua
+
+    require("lector").setup()
+<
+setup() returns false and remains inert when |nvim_ui_send()| is unavailable.
+Calling setup() again replaces the previous configuration and autocmd group.
+
+To stop and remove listeners programmatically: >lua
+
+    require("lector").teardown()
+<
+==============================================================================
+3. Commands                                              *lector-commands*
+
+                                                        *:LectorSay*
+:LectorSay {text}
+        Send {text} as application-authored semantic speech.
+
+                                                     *:LectorStatus*
+:LectorStatus
+        Read the current buffer name, state, cursor location, fold state, and
+        active Visual selection. No default mapping is installed.
+
+                                    *:LectorCompletionDocumentation*
+:LectorCompletionDocumentation
+        Read documentation for the currently selected completion item when
+        the provider exposes it.
+
+                                *:LectorAccessibilityEnable*
+:LectorAccessibilityEnable
+        Enable the client and reassert semantic policy.
+
+                               *:LectorAccessibilityDisable*
+:LectorAccessibilityDisable
+        Send protocol end, close semantic menus, and disable the client.
+
+Use |:checkhealth| lector to inspect compatibility and current state.
+
+==============================================================================
+4. Options                                                *lector-options*
+
+Every option below defaults to true and is passed to setup():
+
+announce_buffers
+        Announce the buffer name and current line on entry.
+
+announce_cursor
+        Announce semantic character, word, WORD, and line destinations.
+
+announce_deletions
+        Announce Insert deletions and structured operator edits.
+
+announce_diagnostics
+        Announce diagnostics when entering or revisiting a diagnosed line.
+
+announce_modes
+        Announce meaningful editor mode changes.
+
+announce_messages
+        Announce recorded messages and yield transient output to ordinary
+        terminal reading.
+
+announce_floating_windows
+        Announce newly displayed informational floating windows.
+
+announce_command_line
+        Announce command-line type, movement, history, and completion.
+
+announce_value_changes
+        Announce values changed by CTRL-A and CTRL-X families.
+
+announce_puts
+        Announce put text or a concise line/block summary.
+
+announce_folds
+        Announce closed-fold entry and fold opening or closing.
+
+announce_search
+        Announce current and total search matches plus wrapping.
+
+announce_quickfix
+        Announce structured quickfix and location-list destinations.
+
+announce_recording
+        Announce macro recording start and stop.
+
+announce_spelling
+        Announce misspelled, rare, regional, and capitalization results.
+
+announce_completions
+        Announce native and registered completion menu selection.
+
+announce_popup_menus
+        Announce Neovim's native right-click context menu.
+
+completion_include_kind
+completion_include_source
+completion_include_position
+        Include the corresponding metadata in completion announcements.
+
+==============================================================================
+5. Behavior                                              *lector-behavior*
+
+Motion semantics are derived from Neovim events and the post-mapping input
+stream. Character motions read characters, word motions read words or WORDs,
+and vertical motions read structured lines. Opaque mappings and programmatic
+cursor changes safely use a geometric fallback.
+
+Operator edits use |TextYankPost|. Put announcements use |TextPutPost| when
+available and a change-verified keyboard fallback otherwise. Fold, search,
+quickfix, recording, spelling, diagnostic, command-line, message, and window
+state come from documented Neovim APIs and events.
+
+Actions which may display output send protocol end before Neovim processes the
+action. A resulting semantic event immediately reclaims policy. If Neovim
+instead enters a pager, hit-enter prompt, confirmation, external command, or
+terminal buffer, ordinary screen-reader behavior remains active until Neovim
+returns. Visual presentation is not reconstructed or removed.
+
+The plugin reasserts its complete policy after resume, focus gain, UI entry,
+and relevant shell return. It sends end before suspend, exit, and terminal
+buffer entry. The terminal consumer remains responsible for reset,
+alternate-screen, PTY, and pane-local failsafes.
+
+==============================================================================
+6. Completion API                                 *lector-completion-api*
+
+Plugins may publish provider-neutral menu state: >lua
+
+    require("lector").update_menu({
+      id = "provider-menu",
+      name = "completion menu",
+      count = 3,
+      index = 2,
+      label = "print",
+      kind = "function",
+      source = "LSP",
+      documentation = "Print a value.",
+    })
+
+    require("lector").close_menu("provider-menu")
+<
+index is one-based and may be omitted to represent no selection. label is
+required for a selected item. kind, source, and documentation are optional.
+
+==============================================================================
+7. Compatibility                                  *lector-compatibility*
+
+The terminal transport requires Neovim API level 14 and |nvim_ui_send()|,
+currently provided by Neovim 0.13/nightly. Individual newer events such as
+TextPutPost and SearchWrapped are feature-detected and have bounded fallbacks.
+
+The protocol is one-way. checkhealth can validate the producer but cannot ask
+whether the host terminal consumed a message.
+
+Protocol specification: https://github.com/n0ot/lector.nvim/blob/master/PROTOCOL.md
+Lector screen reader: https://github.com/n0ot/lector
+
+vim:tw=78:ts=8:noet:ft=help:norl:
