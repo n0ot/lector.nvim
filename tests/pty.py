@@ -143,12 +143,49 @@ def main() -> int:
 
             session.clear()
             session.send(b"ione\rone\rone\x1b")
+            session.clear()
             session.send(b"ggdd")
-            session.wait_for_event("deleted 1 line")
+            session.wait_for_event("one")
+            if any(event.startswith("deleted") for event in session.events):
+                raise AssertionError(f"deletion contents were announced: {session.events!r}")
+
+            session.clear()
+            session.send(b"u")
+            session.pump(0.2)
+            if any(event.startswith("deleted") for event in session.events):
+                raise AssertionError(f"undo was misreported as deletion: {session.events!r}")
+
+            session.send(b"gg0")
+            session.clear()
+            session.send(b"dw")
+            session.wait_for_event("blank")
+            if session.events.count("blank") != 1:
+                raise AssertionError(f"deletion destination repeated: {session.events!r}")
+            if any(event.startswith("deleted") for event in session.events):
+                raise AssertionError(f"word contents were announced after deletion: {session.events!r}")
+
+            session.clear()
+            session.send(b"p")
+            session.wait_for_event("pasted one")
+            semantic = [event for event in session.events if event not in {
+                "end", "set;auto=0;cursor=0"
+            }]
+            if semantic != ["pasted one"]:
+                raise AssertionError(f"put had competing announcements: {session.events!r}")
+
+            session.send(b":vsplit\r")
+            session.pump(0.2)
+            session.clear()
+            session.send(b"\x17w")
+            session.pump(0.2)
+            if any(event in {"one", "blank"} for event in session.events):
+                raise AssertionError(f"CTRL-W was interpreted as cursor motion: {session.events!r}")
+            session.send(b":only\r")
+            session.pump(0.2)
 
             session.clear()
             session.send(b"gg/one\r")
-            session.wait_for_event("2 of 2")
+            session.wait_for_event("2 of 3")
 
             session.send(b":nnoremenu 10.10 PopUp.PTY <Cmd>let g:lector_pty_menu=1<CR>\r")
             session.clear()

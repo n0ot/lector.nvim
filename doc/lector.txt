@@ -70,16 +70,19 @@ Use |:checkhealth| lector to inspect compatibility and current state.
 Every option below defaults to true and is passed to setup():
 
 announce_buffers
-        Announce the buffer name and current line on entry.
+        Announce the buffer name on entry. Cursor-line reading remains a
+        separate cursor-motion behavior.
 
 announce_cursor
         Announce semantic character, word, WORD, and line destinations.
 
 announce_deletions
-        Announce Insert deletions and structured operator edits.
+        Announce where the cursor lands after Insert deletions and structured
+        operator edits. Deleted contents are not spoken.
 
 announce_diagnostics
-        Announce diagnostics when entering or revisiting a diagnosed line.
+        Announce changed diagnostics when entering or revisiting a diagnosed
+        line. Identical events at the same location are coalesced.
 
 announce_modes
         Announce meaningful editor mode changes.
@@ -89,7 +92,9 @@ announce_messages
         terminal reading.
 
 announce_floating_windows
-        Announce newly displayed informational floating windows.
+        Announce newly displayed informational floating windows. Provider UI
+        layouts already handled semantically, including Blink and which-key
+        windows, are not flattened into speech.
 
 announce_command_line
         Announce command-line type, movement, history, and completion.
@@ -134,13 +139,16 @@ stream. Character motions read characters, word motions read words or WORDs,
 and vertical motions read structured lines. Opaque mappings and programmatic
 cursor changes safely use a geometric fallback.
 
-Operator edits use |TextYankPost|. Put announcements use |TextPutPost| when
-available and a change-verified keyboard fallback otherwise. Fold, search,
+Operator edit destinations use |TextYankPost|. Put announcements use
+|TextPutPost| when available and a change-verified keyboard fallback
+otherwise. Fold, search,
 quickfix, recording, spelling, diagnostic, command-line, message, and window
 state come from documented Neovim APIs and events.
 
 Actions which may display output send protocol end before Neovim processes the
-action. A resulting semantic event immediately reclaims policy. If Neovim
+action. Visible output is left to ordinary terminal reading and is not
+repeated as synthetic speech. A resulting semantic event immediately reclaims
+policy. If Neovim
 instead enters a pager, hit-enter prompt, confirmation, external command, or
 terminal buffer, ordinary screen-reader behavior remains active until Neovim
 returns. Visual presentation is not reconstructed or removed.

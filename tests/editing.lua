@@ -127,7 +127,8 @@ end
 vim.api.nvim_exec_autocmds("TextChangedI", { buffer = 0, modeline = false })
 vim.api.nvim_win_get_cursor = original_get_cursor
 vim.api.nvim_win_set_cursor(0, { 1, #after - 1 })
-equal({ "c" }, speech(), "Backspace remains audible while completion is open")
+vim.wait(10)
+equal({ "e" }, speech(), "Backspace reports the resulting cursor position")
 
 clear()
 input_listener("x")
@@ -148,7 +149,8 @@ vim.api.nvim_buf_set_lines(0, 0, -1, false, { "ac" })
 vim.api.nvim_win_set_cursor(0, { 1, 1 })
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
 vim.api.nvim_exec_autocmds("TextChanged", { buffer = 0, modeline = false })
-equal({ "deleted b" }, speech(), "editing cursor movement does not precede deletion speech")
+vim.wait(10)
+equal({ "c" }, speech(), "deletion reports only the resulting cursor position")
 
 clear()
 local original_get_mode = vim.api.nvim_get_mode
@@ -211,6 +213,20 @@ equal(
   speech(),
   "normal-mode diagnostics include the remaining count"
 )
+
+clear()
+vim.api.nvim_exec_autocmds("DiagnosticChanged", {
+  buffer = 0,
+  data = {
+    diagnostics = {
+      { lnum = 0, severity = vim.diagnostic.severity.ERROR, message = "invalid syntax" },
+      { lnum = 0, severity = vim.diagnostic.severity.WARN, message = "unused import" },
+      { lnum = 0, severity = vim.diagnostic.severity.INFO, message = "consider sorting" },
+    },
+  },
+  modeline = false,
+})
+equal({}, speech(), "an unchanged diagnostic event does not repeat")
 
 clear()
 local original_get_option_value = vim.api.nvim_get_option_value
@@ -347,7 +363,7 @@ assert(lector.setup({
   announce_diagnostics = false,
   announce_modes = false,
   announce_messages = false,
-  announce_floating_windows = false,
+  announce_floating_windows = true,
   announce_command_line = false,
   announce_value_changes = false,
   announce_completions = false,
@@ -356,11 +372,46 @@ vim.wait(10)
 equal(
   {
     { kind = "say", text = "lector-buffer-announcement-test.lua" },
-    { kind = "line", text = "first line", indentation = 2 },
   },
   semantic_speech(),
-  "buffer entry announces the name and current line separately"
+  "buffer entry announces its name without reading the current line"
 )
+
+clear()
+local hover_buffer = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_lines(hover_buffer, 0, -1, false, { "hover detail" })
+local hover_window = vim.api.nvim_open_win(hover_buffer, false, {
+  relative = "editor",
+  row = 1,
+  col = 1,
+  width = 20,
+  height = 1,
+  style = "minimal",
+})
+assert(vim.wait(500, function() return #speech() > 0 end), "floating window announcement timed out")
+equal({ "hover detail" }, speech(), "informational floating windows remain readable")
+
+clear()
+vim.api.nvim_win_close(hover_window, true)
+vim.wait(20)
+equal({}, speech(), "closing a floating window does not reannounce the current buffer")
+
+local which_key_buffer = vim.api.nvim_create_buf(false, true)
+vim.bo[which_key_buffer].filetype = "wk"
+vim.api.nvim_buf_set_lines(which_key_buffer, 0, -1, false, {
+  "icons mappings flattened visual layout",
+})
+local which_key_window = vim.api.nvim_open_win(which_key_buffer, false, {
+  relative = "editor",
+  row = 2,
+  col = 1,
+  width = 40,
+  height = 1,
+  style = "minimal",
+})
+vim.wait(100)
+equal({}, speech(), "which-key's visual layout is not flattened into speech")
+vim.api.nvim_win_close(which_key_window, true)
 lector.teardown()
 restore()
 print("lector Neovim editing tests passed")

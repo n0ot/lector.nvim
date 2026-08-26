@@ -177,9 +177,27 @@ equal({ "gamma, function, LSP, 1 of 2" }, speech(), "Blink opening selection")
 
 blink_selection = 2
 clear()
-vim.api.nvim_exec_autocmds("User", { pattern = "BlinkCmpMenuOpen", modeline = false })
+vim.api.nvim_exec_autocmds("User", { pattern = "BlinkCmpListSelect", modeline = false })
 assert(vim.wait(500, function() return #speech() > 0 end), "Blink selection timed out")
 equal({ "garden (path), folder, Path, 2 of 2" }, speech(), "Blink changed selection")
+
+clear()
+vim.api.nvim_exec_autocmds("User", { pattern = "BlinkCmpListSelect", modeline = false })
+vim.wait(20)
+equal({}, speech(), "unchanged Blink selection does not repeat")
+
+blink_candidates = {
+  {
+    label = "write",
+    kind_name = "Property",
+    source_name = "Cmdline",
+  },
+}
+blink_selection = 1
+clear()
+vim.api.nvim_exec_autocmds("User", { pattern = "BlinkCmpListSelect", modeline = false })
+assert(vim.wait(500, function() return #speech() > 0 end), "Blink Cmdline selection timed out")
+equal({ "write, 1 of 1" }, speech(), "Blink command completion omits generic provider metadata")
 
 clear()
 vim.api.nvim_exec_autocmds("User", { pattern = "BlinkCmpMenuClose", modeline = false })

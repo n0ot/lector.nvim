@@ -47,6 +47,20 @@ local function speech()
   return result
 end
 
+local function semantic_text()
+  local result = {}
+  for _, value in ipairs(sent) do
+    local encoded = value:match("^\27_Lector;A11y;1;say;([%da-f]+)\27\\$")
+      or value:match("^\27_Lector;A11y;1;line;indent=%d+;([%da-f]+)\27\\$")
+    if encoded then
+      table.insert(result, (encoded:gsub("%x%x", function(pair)
+        return string.char(tonumber(pair, 16))
+      end)))
+    end
+  end
+  return result
+end
+
 local function clear()
   sent = {}
 end
@@ -81,19 +95,22 @@ vim.wait(10)
 
 clear()
 vim.cmd("normal! dd")
-equal({ "deleted 1 line" }, speech(), "linewise deletion uses TextYankPost contents")
+vim.wait(10)
+equal({ "two" }, semantic_text(), "linewise deletion reads the line under the resulting cursor")
 
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { "foo bar baz" })
 vim.api.nvim_win_set_cursor(0, { 1, 4 })
 clear()
 vim.cmd("normal! daw")
-equal({ "deleted bar" }, speech(), "operator deletion reports the exact deleted word")
+vim.wait(10)
+equal({ "b" }, semantic_text(), "operator deletion reads the resulting cursor character")
 
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { "one", "two", "three" })
 vim.api.nvim_win_set_cursor(0, { 1, 0 })
 clear()
 vim.cmd("normal! Vjd")
-equal({ "deleted 2 lines" }, speech(), "Visual line deletion reports its range")
+vim.wait(10)
+equal({ "three" }, semantic_text(), "Visual line deletion reads the resulting line")
 
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { "anchor" })
 vim.api.nvim_win_set_cursor(0, { 1, 0 })
@@ -168,8 +185,8 @@ equal(
   {
     "error, bad value, lector-semantics.lua, line 2, 1 of 1",
   },
-  speech(),
-  "a quickfix destination includes the entry and its position"
+  semantic_text(),
+  "a quickfix destination replaces the competing cursor-line announcement"
 )
 
 vim.fn.setqflist({}, "f")
@@ -192,8 +209,8 @@ equal(
   {
     "warning, local warning, lector-semantics.lua, line 1, 1 of 1",
   },
-  speech(),
-  "a location-list destination uses the window-local list"
+  semantic_text(),
+  "a location-list destination uses the window-local list without repeating the line"
 )
 vim.fn.setloclist(0, {}, "f")
 
@@ -215,7 +232,7 @@ vim.api.nvim_exec_autocmds("CursorMoved", {
 })
 equal(
   { "warning, second problem, lector-semantics.lua, line 2, 2 of 2" },
-  speech(),
+  semantic_text(),
   "an open quickfix window reads its structured entry"
 )
 vim.cmd("cclose")
@@ -232,9 +249,9 @@ clear()
 vim.api.nvim_win_set_cursor(0, { 1, 4 })
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
 equal(
-  { "quik", "misspelled, quik" },
+  { "misspelled, quik" },
   speech(),
-  "entering a visually spellchecked word announces it once"
+  "entering a visually spellchecked word does not repeat the word"
 )
 clear()
 vim.api.nvim_win_set_cursor(0, { 1, 5 })

@@ -26,6 +26,8 @@ local state = {
   pending_put = nil,
   put_prefix = nil,
   structured_edit_ticks = {},
+  edit_destination_ticks = {},
+  put_announcement_ticks = {},
   pending_insert_diagnostics = {},
   suppress_next_cursor = nil,
   suppress_edit_cursor = false,
@@ -42,6 +44,8 @@ local state = {
   discard_pending_messages = false,
   suppress_prompt_mode_return = nil,
   last_spelling = nil,
+  diagnostic_announcements = {},
+  recent_list_destination = nil,
   search_announcement_generation = 0,
   search_wrapped = false,
   list_selections = {},
@@ -146,6 +150,9 @@ function M.activate()
   })
   if ok and buftype == "terminal" then
     if state.terminal_command_line then
+      if state.active then
+        return true
+      end
       local sent = send("set;auto=0;cursor=0")
       state.active = sent
       return sent
@@ -158,6 +165,9 @@ function M.activate()
     return false
   end
   state.terminal_fallback = false
+  if state.active then
+    return true
+  end
   local sent = send("set;auto=0;cursor=0")
   state.active = sent
   return sent
@@ -552,14 +562,14 @@ local function spell_error_at_cursor(current)
   }
 end
 
-local function announce_spelling(current)
-  local spelling = spell_error_at_cursor(current)
+local function announce_spelling(current, spelling)
+  spelling = spelling or spell_error_at_cursor(current)
   if not spelling then
     state.last_spelling = nil
-    return
+    return false
   end
   if state.last_spelling == spelling.key then
-    return
+    return false
   end
   state.last_spelling = spelling.key
   local labels = {
@@ -569,6 +579,7 @@ local function announce_spelling(current)
     ["local"] = "regional spelling",
   }
   send_speech((labels[spelling.kind] or "spelling") .. ", " .. spelling.word)
+  return true
 end
 
 local function get_list_info(kind)
@@ -686,6 +697,18 @@ local function announce_selected_list_destination(current)
         state.list_selections[scope] = signature
         local announcement = list_entry_announcement(info, index)
         if announcement then
+          local recent = {
+            window = current.window,
+            buffer = current.buffer,
+            row = current.row,
+          }
+          state.recent_list_destination = recent
+          vim.schedule(function()
+            if state.recent_list_destination == recent then
+              state.recent_list_destination = nil
+            end
+          end)
+          state.discard_pending_messages = true
           send_speech(announcement)
           return true
         end
@@ -693,6 +716,14 @@ local function announce_selected_list_destination(current)
     end
   end
   return false
+end
+
+local function is_recent_list_destination(current)
+  local recent = state.recent_list_destination
+  return recent
+    and recent.window == current.window
+    and recent.buffer == current.buffer
+    and recent.row == current.row
 end
 
 local function schedule_fold_observation()
@@ -825,17 +856,25 @@ end
 
 local function announce_current_line_diagnostic(current, diagnostics)
   if not state.options.announce_diagnostics then
-    return
+    return false
   end
   local diagnostic, count = diagnostic_on_line(current, diagnostics)
-  if diagnostic then
-    local severity = diagnostic_severity_name(diagnostic.severity)
-    local announcement = severity .. ", " .. diagnostic.message
-    if count > 1 then
-      announcement = announcement .. ", " .. (count - 1) .. " more"
-    end
-    send_speech(announcement)
+  if not diagnostic then
+    state.diagnostic_announcements[current.window] = nil
+    return false
   end
+  local severity = diagnostic_severity_name(diagnostic.severity)
+  local announcement = severity .. ", " .. diagnostic.message
+  if count > 1 then
+    announcement = announcement .. ", " .. (count - 1) .. " more"
+  end
+  local key = table.concat({ current.buffer, current.row, announcement }, "\0")
+  if state.diagnostic_announcements[current.window] == key then
+    return false
+  end
+  state.diagnostic_announcements[current.window] = key
+  send_speech(announcement)
+  return true
 end
 
 local function announce_cursor(event)
@@ -860,16 +899,29 @@ local function announce_cursor(event)
     remember(current)
     return
   end
+  local announced_list_destination = announce_selected_list_destination(current)
+  local spelling = spell_error_at_cursor(current)
+  local new_spelling = spelling and state.last_spelling ~= spelling.key
   local previous = state.windows[current.window]
-  if state.options.announce_cursor and previous and previous.buffer == current.buffer then
+  if not announced_list_destination
+    and state.options.announce_cursor
+    and previous
+    and previous.buffer == current.buffer
+  then
     if motion and motion.kind == "character" then
-      send_speech(character_at_cursor(current))
+      if not new_spelling then
+        send_speech(character_at_cursor(current))
+      end
     elseif motion and motion.kind == "word" then
-      local word = motion_word_at(current.line, current.column, false)
-      send_speech(word or character_at_cursor(current))
+      if not new_spelling then
+        local word = motion_word_at(current.line, current.column, false)
+        send_speech(word or character_at_cursor(current))
+      end
     elseif motion and motion.kind == "WORD" then
-      local word = motion_word_at(current.line, current.column, true)
-      send_speech(word or character_at_cursor(current))
+      if not new_spelling then
+        local word = motion_word_at(current.line, current.column, true)
+        send_speech(word or character_at_cursor(current))
+      end
     elseif motion and motion.kind == "line" then
       if not announce_list_window_entry(current) then
         send_line(spoken_line(current), current.indentation)
@@ -883,57 +935,22 @@ local function announce_cursor(event)
       announce_closed_fold(current)
       announce_current_line_diagnostic(current)
     elseif event == "CursorMoved" and previous.column ~= current.column then
-      local distance = character_distance(current.line, current.column, previous.column)
-      if distance > 1 and current.word and current.word_start ~= previous.word_start then
-        send_speech(current.word)
-      else
-        send_speech(character_at_cursor(current))
+      if not new_spelling then
+        local distance = character_distance(current.line, current.column, previous.column)
+        if distance > 1 and current.word and current.word_start ~= previous.word_start then
+          send_speech(current.word)
+        else
+          send_speech(character_at_cursor(current))
+        end
       end
     end
   end
-  announce_selected_list_destination(current)
-  announce_spelling(current)
+  if announced_list_destination then
+    state.last_spelling = spelling and spelling.key or nil
+  else
+    announce_spelling(current, spelling)
+  end
   remember(current)
-end
-
-local function removed_text(before, after, maximum_prefix_bytes)
-  local old = vim.fn.split(before, "\\zs")
-  local new = vim.fn.split(after, "\\zs")
-  if #old <= #new then
-    return nil
-  end
-  local maximum_prefix = math.min(#old, #new)
-  if maximum_prefix_bytes then
-    local prefix_text = before:sub(1, math.max(0, maximum_prefix_bytes))
-    maximum_prefix = math.min(maximum_prefix, vim.fn.strchars(prefix_text, true))
-  end
-  local first_changed = 1
-  while first_changed <= maximum_prefix and old[first_changed] == new[first_changed] do
-    first_changed = first_changed + 1
-  end
-  local old_tail = #old
-  local new_tail = #new
-  while old_tail >= first_changed
-    and new_tail >= first_changed
-    and old[old_tail] == new[new_tail]
-  do
-    old_tail = old_tail - 1
-    new_tail = new_tail - 1
-  end
-  local removed = table.concat(old, "", first_changed, old_tail)
-  if removed == "" then
-    return nil
-  end
-  if removed:match("^ +$") then
-    return #removed == 1 and "space" or (#removed .. " spaces")
-  end
-  if removed:match("^\t+$") then
-    return #removed == 1 and "tab" or (#removed .. " tabs")
-  end
-  if removed:match("^%s+$") then
-    return "blank"
-  end
-  return removed
 end
 
 local function changedtick(buffer)
@@ -993,6 +1010,39 @@ local function mark_structured_edit(buffer)
   end
 end
 
+local function schedule_edit_destination(buffer, force_line, previous)
+  if not state.options.announce_deletions then
+    state.suppress_edit_cursor = false
+    return
+  end
+  local tick = changedtick(buffer)
+  if not tick or state.edit_destination_ticks[buffer] == tick then
+    return
+  end
+  state.edit_destination_ticks[buffer] = tick
+  vim.schedule(function()
+    if not state.enabled then
+      return
+    end
+    local current = snapshot()
+    if not current or current.buffer ~= buffer then
+      return
+    end
+    M.activate()
+    local moved_lines = previous
+      and previous.buffer == current.buffer
+      and (previous.row ~= current.row or previous.line_count ~= current.line_count)
+    if force_line or moved_lines then
+      send_line(spoken_line(current), current.indentation)
+    else
+      send_speech(character_at_cursor(current))
+    end
+    state.suppress_edit_cursor = false
+    remember(current)
+    remember_text(current)
+  end)
+end
+
 local function announce_operator_edit(event)
   local data = structured_event_data(event)
   local operator = data and data.operator
@@ -1000,15 +1050,14 @@ local function announce_operator_edit(event)
     return
   end
   local buffer = event.buf or vim.api.nvim_get_current_buf()
+  local pending_change = state.pending_text_change
+  local previous = pending_change and pending_change.snapshot or nil
   mark_structured_edit(buffer)
   state.pending_text_change = nil
   if state.pending_put then
     return
   end
-  if state.options.announce_deletions and not menu_is_open() then
-    M.activate()
-    send_speech(edit_announcement("deleted", data.regcontents, data.regtype))
-  end
+  schedule_edit_destination(buffer, tostring(data.regtype or ""):sub(1, 1) == "V", previous)
   local current = snapshot()
   remember_text(current)
 end
@@ -1017,11 +1066,17 @@ local function announce_put(data, buffer)
   mark_structured_edit(buffer)
   state.pending_put = nil
   state.pending_text_change = nil
-  if state.options.announce_puts and not menu_is_open() then
+  local tick = changedtick(buffer)
+  local already_announced = tick and state.put_announcement_ticks[buffer] == tick
+  if tick then
+    state.put_announcement_ticks[buffer] = tick
+  end
+  if state.options.announce_puts and not menu_is_open() and not already_announced then
     M.activate()
     send_speech(edit_announcement("pasted", data.regcontents, data.regtype))
   end
   local current = snapshot()
+  state.suppress_edit_cursor = false
   remember(current)
   remember_text(current)
 end
@@ -1105,7 +1160,6 @@ local function announce_text_change()
   state.pending_value_change = nil
   local pending_change = state.pending_text_change
   state.pending_text_change = nil
-  state.suppress_edit_cursor = false
   local current = snapshot()
   if not current then
     return
@@ -1126,14 +1180,6 @@ local function announce_text_change()
   end
   local previous = state.text_windows[current.window]
   local pending = pending_change and pending_change.snapshot
-  local edit_position = previous
-  if pending
-    and pending.window == current.window
-    and pending.buffer == current.buffer
-    and pending.row == current.row
-  then
-    edit_position = pending
-  end
   if (not previous or previous.buffer ~= current.buffer or previous.row ~= current.row)
     and pending
     and pending.window == current.window
@@ -1143,36 +1189,17 @@ local function announce_text_change()
     previous = pending
   end
   if value_change then
+    state.suppress_edit_cursor = false
     if state.options.announce_value_changes then
       send_speech(changed_value_at_cursor(current))
     end
   elseif not structured
-    and state.options.announce_deletions
-    and previous
-    and previous.buffer == current.buffer
+    and pending_change
+    and (pending_change.direct_deletion or pending_change.operator_candidate)
   then
-    if pending_change
-      and pending_change.direct_deletion
-      and previous.line_count > current.line_count
-    then
-      send_speech("line break")
-    elseif pending_change
-      and pending_change.operator_candidate
-      and previous.line_count > current.line_count
-    then
-      local count = previous.line_count - current.line_count
-      send_speech("deleted " .. count .. (count == 1 and " line" or " lines"))
-    elseif previous.row == current.row then
-      local edit_column = math.min(edit_position.column, current.column)
-      local removed = removed_text(previous.line, current.line, edit_column)
-      if removed then
-        if pending_change and pending_change.direct_deletion then
-          send_speech(removed)
-        else
-          send_speech("deleted " .. removed)
-        end
-      end
-    end
+    schedule_edit_destination(current.buffer, false, pending or previous)
+  elseif not structured then
+    state.suppress_edit_cursor = false
   end
   remember(current)
   remember_text(current)
@@ -1246,16 +1273,18 @@ local function announce_buffer()
   end
   remember(current)
   remember_text(current)
+  if announce_list_window_entry(current) then
+    return
+  end
+  if announce_selected_list_destination(current) or is_recent_list_destination(current) then
+    return
+  end
   if not state.options.announce_buffers then
-    announce_current_line_diagnostic(current)
     return
   end
   local announcement_key = table.concat({
     current.window,
     current.buffer,
-    current.row,
-    current.column,
-    current.line,
   }, "\0")
   if announcement_key == state.last_buffer_announcement then
     return
@@ -1264,13 +1293,6 @@ local function announce_buffer()
   local name = vim.api.nvim_buf_get_name(current.buffer)
   name = name == "" and "unnamed buffer" or vim.fn.fnamemodify(name, ":t")
   send_speech(name)
-  if not announce_list_window_entry(current) then
-    send_line(spoken_line(current), current.indentation)
-  end
-  announce_closed_fold(current)
-  announce_current_line_diagnostic(current)
-  announce_selected_list_destination(current)
-  announce_spelling(current)
 end
 
 local function schedule_buffer_announcement()
@@ -1547,6 +1569,10 @@ local function refresh_blink_completion()
   if type(source) ~= "string" or source == "" then
     source = item and item.source_id
   end
+  if type(source) == "string" and source:lower():find("cmdline", 1, true) then
+    kind = nil
+    source = nil
+  end
   M.update_menu({
     id = blink_completion_menu_id,
     name = "completion menu",
@@ -1654,6 +1680,15 @@ local function poll_messages()
   end
   local added = new_message_history(state.message_history, current)
   state.message_history = current
+  if state.command_output_fallback then
+    local ok_mode, current_mode = pcall(vim.api.nvim_get_mode)
+    local mode = ok_mode and current_mode and current_mode.mode or ""
+    if mode:sub(1, 1) == "r" or mode:sub(1, 1) == "!" then
+      return
+    end
+    M.activate()
+    return
+  end
   if state.options.announce_messages and added then
     M.activate()
     send_speech(added)
@@ -1717,7 +1752,7 @@ local function accepts_normal_motion()
     or mode == "\19"
 end
 
-local function record_cursor_motion(key, special_cursor_motions)
+local function record_cursor_motion(key, special_cursor_motions, window_command_key)
   state.pending_cursor_motion = nil
   if state.command_line_active then
     state.cursor_motion_prefix = nil
@@ -1746,12 +1781,17 @@ local function record_cursor_motion(key, special_cursor_motions)
   local prefix = state.cursor_motion_prefix
   state.cursor_motion_prefix = nil
   local kind
-  if prefix == "g" then
+  if prefix == "window" then
+    return
+  elseif prefix == "g" then
     kind = g_cursor_motions[key]
   elseif prefix == "find" then
     if key ~= "\27" then
       kind = "character"
     end
+  elseif key == window_command_key then
+    state.cursor_motion_prefix = "window"
+    return
   elseif key == "g" then
     state.cursor_motion_prefix = "g"
     return
@@ -2039,11 +2079,10 @@ local function attach_input_listener()
     D = true,
     s = true,
     S = true,
-    u = true,
-    U = true,
     x = true,
     X = true,
-    [vim.api.nvim_replace_termcodes("<C-R>", true, false, true)] = true,
+    p = true,
+    P = true,
   }
   local operator_edit_keys = {
     c = true,
@@ -2066,6 +2105,7 @@ local function attach_input_listener()
     ["#"] = true,
   }
   local escape = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
+  local window_command = vim.api.nvim_replace_termcodes("<C-W>", true, false, true)
   local popup_enter_keys = {
     [vim.api.nvim_replace_termcodes("<CR>", true, false, true)] = true,
     [vim.api.nvim_replace_termcodes("<kEnter>", true, false, true)] = true,
@@ -2174,13 +2214,14 @@ local function attach_input_listener()
       or not state.active
       or state.command_line_active
       or state.terminal_fallback
+      or menu_is_open()
     then
       return
     end
     local ok, current_mode = pcall(vim.api.nvim_get_mode)
     local mode = ok and current_mode and current_mode.mode or ""
     local kind = mode:sub(1, 1)
-    if kind == "r" or kind == "!" or kind == "c" then
+    if kind == "i" or kind == "R" or kind == "r" or kind == "!" or kind == "c" then
       return
     end
     state.command_output_fallback = true
@@ -2206,7 +2247,7 @@ local function attach_input_listener()
     record_edit_cursor_suppression(key, direct_edit_keys, escape)
     record_pending_put(key, put_keys)
     record_text_change_baseline(key, direct_deletion_keys, operator_edit_keys)
-    record_cursor_motion(key, special_cursor_motions)
+    record_cursor_motion(key, special_cursor_motions, window_command)
     record_value_change(key, value_change_keys)
     if search_keys[key] and accepts_normal_motion() then
       schedule_search_announcement()
@@ -2232,9 +2273,14 @@ local function attach_input_listener()
     schedule_message_poll()
     schedule_fold_observation()
     schedule_floating_window_scan()
-    schedule_blink_completion_refresh()
   end, state.input_namespace)
 end
+
+local ignored_floating_window_filetypes = {
+  ["blink-cmp-documentation"] = true,
+  ["blink-cmp-menu"] = true,
+  wk = true,
+}
 
 local function announce_floating_windows(windows)
   vim.schedule(function()
@@ -2249,9 +2295,11 @@ local function announce_floating_windows(windows)
       if vim.api.nvim_win_is_valid(window) and vim.api.nvim_get_current_win() ~= window then
         local config = vim.api.nvim_win_get_config(window)
         local buffer = vim.api.nvim_win_get_buf(window)
+        local filetype = vim.bo[buffer].filetype
         if (config.relative ~= "" or config.external)
           and vim.api.nvim_buf_is_valid(buffer)
           and vim.bo[buffer].buftype ~= "terminal"
+          and not ignored_floating_window_filetypes[filetype]
         then
           local line_count = math.min(vim.api.nvim_buf_line_count(buffer), 200)
           local lines = vim.api.nvim_buf_get_lines(buffer, 0, line_count, false)
@@ -2337,6 +2385,7 @@ local function forget_window(event)
   state.known_windows[window] = nil
   state.windows[window] = nil
   state.text_windows[window] = nil
+  state.diagnostic_announcements[window] = nil
 end
 
 local function create_autocmd(events, callback)
@@ -2385,6 +2434,8 @@ function M.setup(options)
   state.pending_put = nil
   state.put_prefix = nil
   state.structured_edit_ticks = {}
+  state.edit_destination_ticks = {}
+  state.put_announcement_ticks = {}
   state.pending_insert_diagnostics = {}
   state.suppress_next_cursor = nil
   state.suppress_edit_cursor = false
@@ -2401,6 +2452,8 @@ function M.setup(options)
   state.discard_pending_messages = false
   state.suppress_prompt_mode_return = nil
   state.last_spelling = nil
+  state.diagnostic_announcements = {}
+  state.recent_list_destination = nil
   state.search_announcement_generation = 0
   state.search_wrapped = false
   state.list_selections = {}
@@ -2427,7 +2480,6 @@ function M.setup(options)
   create_autocmd("WinNew", announce_new_floating_windows)
   create_autocmd("WinClosed", function(event)
     forget_window(event)
-    schedule_buffer_announcement()
   end)
   create_autocmd({ "CursorMoved", "CursorMovedI" }, function(event)
     announce_cursor(event.event)
@@ -2528,6 +2580,17 @@ function M.setup(options)
     group = group_name,
     pattern = "BlinkCmpMenuClose",
     callback = close_blink_completion,
+  })
+  vim.api.nvim_create_autocmd("User", {
+    group = group_name,
+    pattern = { "BlinkCmpListSelect", "BlinkCmpShow" },
+    callback = function()
+      vim.schedule(function()
+        if state.enabled and state.blink_menu_open then
+          refresh_blink_completion()
+        end
+      end)
+    end,
   })
   create_autocmd("SafeState", schedule_message_poll)
 

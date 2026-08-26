@@ -47,10 +47,10 @@ The plugin does not define key mappings.
 
 ## What it announces
 
-- Buffer entry, cursor motions, editor modes, indentation changes, and Visual
-  selections
-- Insert deletions, operator edits, puts, numeric changes, folds, searches,
-  spelling errors, and macro recording
+- Buffer names on entry, cursor motions, editor modes, indentation changes,
+  and Visual selections
+- Resulting cursor destinations after deletions, put summaries, numeric
+  changes, folds, searches, spelling errors, and macro recording
 - Diagnostics, messages, quickfix and location-list entries, command-line
   editing, native completion, and optional Blink completion details
 - Informational floating windows, native context menus, and terminal-buffer
@@ -59,7 +59,7 @@ The plugin does not define key mappings.
 Input which may produce transient terminal output temporarily restores the
 screen reader's ordinary reading. This preserves Neovim's visual presentation
 for `:echo`, errors, hit-enter prompts, pagers, external commands, and similar
-interfaces instead of reconstructing their screen output in Lua.
+interfaces instead of reconstructing or repeating their screen output in Lua.
 
 See [`:help lector.nvim`](doc/lector.txt) for the complete behavior and option
 reference.

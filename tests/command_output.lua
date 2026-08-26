@@ -97,6 +97,15 @@ assert(lector.setup(options))
 assert(type(input_listener) == "function", "input listener was not installed")
 vim.wait(20)
 
+vim.api.nvim_get_mode = function()
+  return { mode = "i", blocking = false }
+end
+clear()
+input_listener("x")
+vim.wait(20)
+equal({}, protocol_commands(), "ordinary Insert input keeps semantic policy stable")
+vim.api.nvim_get_mode = original_get_mode
+
 clear()
 enter_command_line()
 clear()
@@ -116,9 +125,9 @@ enter_command_line()
 clear()
 leave_command_line(true)
 equal(
-  { "set;auto=0;cursor=0" },
+  {},
   protocol_commands(),
-  "aborted command line never enables output fallback"
+  "aborted command line leaves the existing semantic policy unchanged"
 )
 
 local mode = "rm"
@@ -217,15 +226,14 @@ equal(
   {
     "end",
     "set;auto=0;cursor=0",
-    "say;6c6563746f7220636f6d6d616e64206f75747075742066616c6c6261636b2074657374",
   },
   protocol_commands(),
-  "recorded messages replace ordinary output with exact semantic speech"
+  "visible command output restores semantic policy without repeating the message"
 )
 equal(
-  { "lector command output fallback test" },
+  {},
   speech(),
-  "recorded messages remain exact semantic speech"
+  "visible command output is left to ordinary screen reading"
 )
 
 input_listener("x")
