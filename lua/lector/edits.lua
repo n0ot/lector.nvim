@@ -74,6 +74,7 @@ function M.new(dependencies)
     send_line = assert(dependencies.send_line),
     send_speech = assert(dependencies.send_speech),
     snapshot = assert(dependencies.snapshot),
+    spoken_deletion = assert(dependencies.spoken_deletion),
     spoken_line = assert(dependencies.spoken_line),
     structured_edit_ticks = {},
     suppress_edit_cursor = false,
@@ -347,11 +348,21 @@ function Edits:announce_text_change(event)
     self:suppress_related_cursor_event()
   elseif effect == "deletion" and self.options().announce_deletions then
     self:suppress_related_cursor_event()
-    self:schedule_destination(
-      current.buffer,
-      self:unstructured_destination(previous, current, removed),
-      previous
-    )
+    local insert_deletion = event
+      and event.event == "TextChangedI"
+      and previous
+      and previous.row == current.row
+      and previous.line_count == current.line_count
+      and removed ~= ""
+    if insert_deletion then
+      self.send_speech(self.spoken_deletion(removed))
+    else
+      self:schedule_destination(
+        current.buffer,
+        self:unstructured_destination(previous, current, removed),
+        previous
+      )
+    end
   elseif event
     and event.event == "TextChanged"
     and previous

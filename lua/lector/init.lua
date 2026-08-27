@@ -19,6 +19,7 @@ local fold_line_count = editor.fold_line_count
 local normalize_speech = protocol.normalize
 local snapshot = editor.snapshot
 local spoken_character = editor.spoken_character
+local spoken_deletion = editor.spoken_deletion
 local spoken_line = editor.spoken_line
 local visual_selection_summary = editor.visual_selection_summary
 local word_at = editor.word_at
@@ -297,6 +298,7 @@ edits = edits_module.new({
   send_line = send_line,
   send_speech = send_speech,
   snapshot = snapshot,
+  spoken_deletion = spoken_deletion,
   spoken_line = spoken_line,
   text_windows = function() return state.text_windows end,
   word_at_or_after = word_at_or_after,
@@ -935,7 +937,7 @@ local function announce_command_line(event)
   send_speech(names[vim.fn.getcmdtype()] or "command")
 end
 
-local function command_line_replaced(previous, current)
+local function command_line_change(previous, current)
   local first = 0
   local limit = math.min(#previous, #current)
   while first < limit and previous:byte(first + 1) == current:byte(first + 1) do
@@ -948,8 +950,24 @@ local function command_line_replaced(previous, current)
   do
     suffix = suffix + 1
   end
-  return (#previous - first - suffix) > 1
-    or (#current - first - suffix) > 1
+  return previous:sub(first + 1, #previous - suffix),
+    current:sub(first + 1, #current - suffix)
+end
+
+local function command_line_change_size(text)
+  local ok, size = pcall(vim.fn.strchars, text, true)
+  return ok and size or #text
+end
+
+local function announce_command_line_change(previous, current)
+  local removed, added = command_line_change(previous, current)
+  local removed_size = command_line_change_size(removed)
+  local added_size = command_line_change_size(added)
+  if removed_size > 0 and added_size == 0 then
+    send_speech(spoken_deletion(removed))
+  elseif removed_size > 1 or added_size > 1 then
+    send_speech(current == "" and "blank" or current)
+  end
 end
 
 local function announce_current_command_line(level)
@@ -975,8 +993,8 @@ local function announce_current_command_line(level)
     return
   end
   state.command_lines[level] = current
-  if previous and command_line_replaced(previous.text, current.text) then
-    send_speech(current.text == "" and "blank" or current.text)
+  if previous then
+    announce_command_line_change(previous.text, current.text)
   end
 end
 

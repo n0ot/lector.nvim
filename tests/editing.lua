@@ -128,7 +128,7 @@ vim.api.nvim_exec_autocmds("TextChangedI", { buffer = 0, modeline = false })
 vim.api.nvim_win_get_cursor = original_get_cursor
 vim.api.nvim_win_set_cursor(0, { 1, #after - 1 })
 vim.wait(10)
-equal({ "e" }, speech(), "Backspace reports the resulting cursor position")
+equal({ "c" }, speech(), "Insert-mode Backspace reports the removed character")
 
 clear()
 input_listener("x")

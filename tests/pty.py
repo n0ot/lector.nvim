@@ -180,9 +180,27 @@ def main() -> int:
                 raise AssertionError(
                     f"command-line right motion failed: events={session.events!r}"
                 )
+            session.clear()
+            session.send(b"\x7f")
+            session.wait_for_event("1")
+            session.pump(0.2)
+            if session.events != ["1"]:
+                raise AssertionError(
+                    f"command-line deletion did not announce removed text: {session.events!r}"
+                )
             session.send(b"\x1b")
 
-            session.send(b"atest\x1b")
+            session.send(b"atest")
+            session.pump(0.2)
+            session.clear()
+            session.send(b"\x7f")
+            session.wait_for_event("t")
+            session.pump(0.2)
+            if session.events != ["t"]:
+                raise AssertionError(
+                    f"Insert-mode deletion did not announce removed text: {session.events!r}"
+                )
+            session.send(b"t\x1b")
             session.pump(0.2)
             session.clear()
             session.send(b"0")

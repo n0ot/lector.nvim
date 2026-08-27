@@ -104,6 +104,25 @@ function M.spoken_character(character)
   return character
 end
 
+function M.spoken_deletion(text)
+  text = tostring(text or "")
+  local ok, size = pcall(vim.fn.strchars, text, true)
+  size = ok and size or #text
+  if size <= 1 then
+    return M.spoken_character(text)
+  end
+  if text:match("^ +$") then
+    return size .. " spaces"
+  end
+  if text:match("^\t+$") then
+    return size .. " tabs"
+  end
+  if text:match("^%s+$") then
+    return size .. " whitespace characters"
+  end
+  return text
+end
+
 function M.character_at_cursor(current)
   local tail = current.line:sub(current.column + 1)
   return M.spoken_character(vim.fn.strcharpart(tail, 0, 1))
