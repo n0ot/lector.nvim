@@ -961,26 +961,58 @@ local function announce_current_line_diagnostic(current, diagnostics)
   return true
 end
 
+local function changedtick(buffer)
+  local ok, tick = pcall(vim.api.nvim_buf_get_changedtick, buffer)
+  return ok and tick or nil
+end
+
+local function refresh_failed_motion(motion)
+  if motion and state.pending_cursor_motion == motion then
+    motion.speech_generation = state.speech_generation
+  end
+end
+
 local function announce_cursor(event)
   M.activate()
   local motion = state.pending_cursor_motion
-  state.pending_cursor_motion = nil
   local current = snapshot()
   if not current then
+    state.pending_cursor_motion = nil
     return
+  end
+  local deferred_failed_motion
+  if motion
+    and motion.snapshot
+    and current.window == motion.snapshot.window
+    and current.buffer == motion.snapshot.buffer
+    and current.row == motion.snapshot.row
+    and current.column == motion.snapshot.column
+    and changedtick(current.buffer) == motion.changedtick
+  then
+    -- CursorMoved may be coalesced across rapidly entered mappings. If the
+    -- newest bracket navigation did not move from its own snapshot, this
+    -- event belongs to an earlier motion. Preserve the failure observation
+    -- while the geometric fallback announces the cursor's actual arrival.
+    deferred_failed_motion = motion
+    motion = nil
+  else
+    state.pending_cursor_motion = nil
   end
   if state.suppress_next_cursor then
     state.suppress_next_cursor = nil
     remember(current)
+    refresh_failed_motion(deferred_failed_motion)
     return
   end
   if state.suppress_edit_cursor then
     state.suppress_edit_cursor = false
     remember(current)
+    refresh_failed_motion(deferred_failed_motion)
     return
   end
   if menu_is_open() then
     remember(current)
+    refresh_failed_motion(deferred_failed_motion)
     return
   end
   local announced_list_destination = announce_selected_list_destination(current)
@@ -1035,11 +1067,7 @@ local function announce_cursor(event)
     announce_spelling(current, spelling)
   end
   remember(current)
-end
-
-local function changedtick(buffer)
-  local ok, tick = pcall(vim.api.nvim_buf_get_changedtick, buffer)
-  return ok and tick or nil
+  refresh_failed_motion(deferred_failed_motion)
 end
 
 local function spoken_register_text(text)

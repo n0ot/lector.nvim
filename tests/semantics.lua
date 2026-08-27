@@ -310,6 +310,25 @@ equal(
 vim.api.nvim_win_set_cursor(0, { 1, 0 })
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
 clear()
+input_listener("opaque callback", "]c")
+vim.api.nvim_win_set_cursor(0, { 2, 0 })
+input_listener("opaque callback", "]c")
+vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+vim.wait(10)
+equal(
+  { "second", "no next item" },
+  semantic_text(),
+  "coalesced cursor movement retains its destination and failure feedback"
+)
+equal(
+  { "no next item" },
+  speech(),
+  "a rapid failed bracket navigation survives the prior cursor event"
+)
+
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+clear()
 input_listener("opaque callback", "[b")
 vim.wait(10)
 equal(
