@@ -143,6 +143,22 @@ The real-TUI test uses only Python's standard library and exercises Neovim
 through a PTY, including the blocking native context-menu loop, transient
 command output, and terminal-buffer handoff.
 
+## Architecture
+
+`lua/lector/init.lua` coordinates setup, teardown, autocmds, and cross-feature
+policy. Cohesive behavior lives in smaller modules:
+
+- `protocol.lua` owns APC framing and speech sanitization.
+- `editor.lua` provides stateless editor snapshots, text inspection, and diffs.
+- `edits.lua` classifies text effects and owns edit-observation state.
+- `providers.lua` owns provider navigation and search transactions.
+- `menus.lua`, `completion.lua`, and `context_menu.lua` separate menu state,
+  completion adapters, and the native context-menu interaction loop.
+
+Stateful modules are factories. Every loaded lector.nvim instance receives new
+feature objects, while cached module definitions remain safe across in-process
+reloads.
+
 ## License and provenance
 
 `lector.nvim` is MIT licensed. Its implementation was written against public
