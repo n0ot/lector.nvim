@@ -311,7 +311,29 @@ equal(
   vim.g.lector_popup_choice,
   "Enter activates the exact selected context-menu item"
 )
-equal({}, speech(), "context-menu activation adds no synthetic speech")
+equal(
+  { "closed" },
+  speech(),
+  "a context-menu close is announced after a silent activation"
+)
+
+vim.cmd(
+  "nnoremenu 10.25 PopUp.Announced <Cmd>lua require('lector').say('menu action')<CR>"
+)
+clear()
+vim.api.nvim_exec_autocmds("MenuPopup", { pattern = "n", modeline = false })
+for _ = 1, 3 do
+  clear()
+  input_listener(down)
+end
+clear()
+input_listener(enter)
+vim.wait(10)
+equal(
+  { "menu action" },
+  speech(),
+  "a context-menu action announcement supersedes the close announcement"
+)
 
 vim.cmd("nnoremenu 90.10 PopUp.Parent.Child <Nop>")
 clear()
@@ -349,6 +371,11 @@ assert(ended(), "submenus should return to ordinary terminal tracking")
 assert(not lector.health_info().active, "semantic mode stayed active inside a native submenu")
 vim.wait(10)
 assert(lector.health_info().active, "semantic mode did not resume after the menu closed")
+equal(
+  { "closed" },
+  speech(),
+  "a native submenu close is announced when nothing follows it"
+)
 
 lector.teardown()
 
@@ -404,8 +431,33 @@ equal({ "hover detail" }, speech(), "informational floating windows remain reada
 clear()
 vim.api.nvim_win_close(hover_window, true)
 vim.wait(20)
-equal({}, speech(), "closing a floating window does not reannounce the current buffer")
+equal({ "closed" }, speech(), "closing a floating window is announced")
 
+vim.cmd("new")
+vim.api.nvim_buf_set_name(0, "/private/tmp/lector-closing-window-test.lua")
+vim.wait(20)
+clear()
+vim.cmd("close")
+vim.wait(20)
+equal(
+  { "lector-buffer-announcement-test.lua" },
+  speech(),
+  "the underlying buffer name supersedes a window-close announcement"
+)
+
+vim.cmd("enew")
+vim.api.nvim_buf_set_name(0, "/private/tmp/lector-closing-buffer-test.lua")
+vim.wait(20)
+clear()
+vim.cmd("bdelete")
+vim.wait(20)
+equal(
+  { "lector-buffer-announcement-test.lua" },
+  speech(),
+  "closing a buffer reads the underlying buffer without also saying closed"
+)
+
+clear()
 local which_key_buffer = vim.api.nvim_create_buf(false, true)
 vim.bo[which_key_buffer].filetype = "wk"
 vim.api.nvim_buf_set_lines(which_key_buffer, 0, -1, false, {

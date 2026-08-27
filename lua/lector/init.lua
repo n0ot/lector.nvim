@@ -56,6 +56,8 @@ local state = {
   message_poll_scheduled = false,
   buffer_announcement_generation = 0,
   window_scan_generation = 0,
+  speech_generation = 0,
+  closed_announcement_generation = 0,
 }
 
 local defaults = {
@@ -126,7 +128,11 @@ local function send_speech(text)
   if not text then
     return false
   end
-  return send("say;" .. hex_encode(text))
+  local sent = send("say;" .. hex_encode(text))
+  if sent then
+    state.speech_generation = state.speech_generation + 1
+  end
+  return sent
 end
 
 local function send_line(text, indentation)
@@ -138,7 +144,11 @@ local function send_line(text, indentation)
     return false
   end
   indentation = math.max(0, math.min(65535, math.floor(tonumber(indentation) or 0)))
-  return send("line;indent=" .. indentation .. ";" .. hex_encode(text))
+  local sent = send("line;indent=" .. indentation .. ";" .. hex_encode(text))
+  if sent then
+    state.speech_generation = state.speech_generation + 1
+  end
+  return sent
 end
 
 function M.activate()
@@ -186,6 +196,27 @@ function M.say(text)
     return false
   end
   return send_speech(text)
+end
+
+local function schedule_closed_announcement()
+  if not state.enabled then
+    return
+  end
+  state.closed_announcement_generation = state.closed_announcement_generation + 1
+  local generation = state.closed_announcement_generation
+  local speech_generation = state.speech_generation
+  -- Give announcements caused by the close, including a scheduled buffer
+  -- announcement, a complete event-loop turn to run first.
+  vim.schedule(function()
+    vim.schedule(function()
+      if state.enabled
+        and generation == state.closed_announcement_generation
+        and speech_generation == state.speech_generation
+      then
+        M.say("closed")
+      end
+    end)
+  end)
 end
 
 local native_completion_kinds = {
@@ -1806,7 +1837,69 @@ local function accepts_normal_motion()
     or mode == "\19"
 end
 
-local function record_cursor_motion(key, special_cursor_motions, window_command_key)
+local function bracket_motion_direction(prefix)
+  if prefix == "bracket-previous" then
+    return "previous"
+  end
+  if prefix == "bracket-next" then
+    return "next"
+  end
+  return nil
+end
+
+local function typed_bracket_motion_direction(typed_key)
+  if type(typed_key) ~= "string" or #typed_key < 2 then
+    return nil
+  end
+  local prefix = typed_key:sub(1, 1)
+  if prefix == "[" then
+    return "previous"
+  end
+  if prefix == "]" then
+    return "next"
+  end
+  return nil
+end
+
+local function schedule_failed_cursor_motion(motion)
+  vim.schedule(function()
+    vim.schedule(function()
+      if state.pending_cursor_motion ~= motion then
+        return
+      end
+      state.pending_cursor_motion = nil
+      if not state.enabled
+        or not state.options.announce_cursor
+        or state.command_line_active
+        or menu_is_open()
+        or motion.speech_generation ~= state.speech_generation
+        or not accepts_normal_motion()
+      then
+        return
+      end
+      local current = snapshot()
+      local previous = motion.snapshot
+      if not current
+        or not previous
+        or current.window ~= previous.window
+        or current.buffer ~= previous.buffer
+        or current.row ~= previous.row
+        or current.column ~= previous.column
+        or changedtick(current.buffer) ~= motion.changedtick
+      then
+        return
+      end
+      M.say("no " .. motion.direction .. " item")
+    end)
+  end)
+end
+
+local function record_cursor_motion(
+  key,
+  typed_key,
+  special_cursor_motions,
+  window_command_key
+)
   state.pending_cursor_motion = nil
   if state.command_line_active then
     state.cursor_motion_prefix = nil
@@ -1836,9 +1929,11 @@ local function record_cursor_motion(key, special_cursor_motions, window_command_
   state.cursor_motion_prefix = nil
   local kind
   local spelling_motion = false
+  local direction
   if prefix == "window" then
     return
-  elseif prefix == "bracket" then
+  elseif bracket_motion_direction(prefix) then
+    direction = bracket_motion_direction(prefix)
     if key ~= "p" and key ~= "P" then
       kind = key == "s" and "word" or "line"
       spelling_motion = key == "s"
@@ -1852,8 +1947,11 @@ local function record_cursor_motion(key, special_cursor_motions, window_command_
   elseif key == window_command_key then
     state.cursor_motion_prefix = "window"
     return
-  elseif key == "[" or key == "]" then
-    state.cursor_motion_prefix = "bracket"
+  elseif key == "[" then
+    state.cursor_motion_prefix = "bracket-previous"
+    return
+  elseif key == "]" then
+    state.cursor_motion_prefix = "bracket-next"
     return
   elseif key == "g" then
     state.cursor_motion_prefix = "g"
@@ -1867,8 +1965,30 @@ local function record_cursor_motion(key, special_cursor_motions, window_command_
     kind = direct_cursor_motions[key] or special_cursor_motions[key]
   end
 
+  if not kind then
+    -- Lua callback mappings are represented by an opaque resolved key. Their
+    -- complete typed bracket command still preserves the navigation family.
+    direction = typed_bracket_motion_direction(typed_key)
+    if direction then
+      kind = "line"
+    end
+  end
+
   if kind then
-    state.pending_cursor_motion = { kind = kind, spelling = spelling_motion }
+    local motion = {
+      kind = kind,
+      spelling = spelling_motion,
+      direction = direction,
+    }
+    if direction then
+      motion.snapshot = snapshot()
+      motion.changedtick = motion.snapshot and changedtick(motion.snapshot.buffer) or nil
+      motion.speech_generation = state.speech_generation
+    end
+    state.pending_cursor_motion = motion
+    if motion.snapshot then
+      schedule_failed_cursor_motion(motion)
+    end
   end
 end
 
@@ -1996,6 +2116,7 @@ local function open_popup_menu(event)
     if state.popup_menu == popup then
       local activation_path = popup.activation_path
       close_popup_menu()
+      schedule_closed_announcement()
       if activation_path then
         local ok, err = pcall(vim.api.nvim_cmd, {
           cmd = "emenu",
@@ -2377,10 +2498,10 @@ local function attach_input_listener()
     M.deactivate()
   end
 
-  -- vim.on_key's first argument is the mapping-expanded command input. Keep
-  -- the physical key (its second argument) deliberately out of the semantic
-  -- decisions below so user mappings retain the behavior of their actions.
-  vim.on_key(function(resolved_key)
+  -- Prefer the mapping-expanded command input so mappings retain the behavior
+  -- of their actions. The typed key is used only when an opaque Lua callback
+  -- otherwise hides a conventional bracket-navigation action.
+  vim.on_key(function(resolved_key, typed_key)
     if not state.enabled then
       return
     end
@@ -2396,7 +2517,7 @@ local function attach_input_listener()
     if not prompt_key then
       begin_input_output_fallback()
     end
-    local bracket_command = state.cursor_motion_prefix == "bracket"
+    local bracket_command = bracket_motion_direction(state.cursor_motion_prefix) ~= nil
     record_edit_cursor_suppression(
       resolved_key,
       direct_edit_keys,
@@ -2410,7 +2531,12 @@ local function attach_input_listener()
       operator_edit_keys,
       bracket_command
     )
-    record_cursor_motion(resolved_key, special_cursor_motions, window_command)
+    record_cursor_motion(
+      resolved_key,
+      typed_key,
+      special_cursor_motions,
+      window_command
+    )
     record_value_change(resolved_key, value_change_keys)
     if search_keys[resolved_key] and accepts_normal_motion() then
       schedule_search_announcement()
@@ -2625,6 +2751,7 @@ function M.setup(options)
   state.message_poll_scheduled = false
   state.message_history = read_message_history()
   state.buffer_announcement_generation = state.buffer_announcement_generation + 1
+  state.closed_announcement_generation = state.closed_announcement_generation + 1
 
   vim.api.nvim_create_augroup(group_name, { clear = true })
   create_autocmd({ "VimEnter", "UIEnter", "VimResume", "FocusGained" }, function()
@@ -2644,6 +2771,7 @@ function M.setup(options)
   create_autocmd("WinNew", announce_new_floating_windows)
   create_autocmd("WinClosed", function(event)
     forget_window(event)
+    schedule_closed_announcement()
   end)
   create_autocmd({ "CursorMoved", "CursorMovedI" }, function(event)
     announce_cursor(event.event)
@@ -2797,6 +2925,7 @@ function M.setup(options)
 end
 
 function M.teardown()
+  state.closed_announcement_generation = state.closed_announcement_generation + 1
   close_all_menus()
   M.deactivate()
   state.enabled = false

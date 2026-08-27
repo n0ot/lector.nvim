@@ -298,6 +298,64 @@ equal(
 )
 
 clear()
+input_listener("]")
+input_listener("c")
+vim.wait(10)
+equal(
+  { "no next item" },
+  speech(),
+  "a bracket navigation with no distinct destination is announced"
+)
+
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+clear()
+input_listener("opaque callback", "[b")
+vim.wait(10)
+equal(
+  { "no previous item" },
+  speech(),
+  "an opaque mapping callback retains its typed bracket-navigation direction"
+)
+
+local original_buffer = vim.api.nvim_get_current_buf()
+local next_buffer = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_buf_set_name(next_buffer, "/private/tmp/lector-next-buffer.lua")
+clear()
+input_listener("opaque callback", "]b")
+vim.api.nvim_set_current_buf(next_buffer)
+vim.wait(10)
+equal(
+  {},
+  speech(),
+  "a successful mapped buffer navigation cancels the unavailable destination"
+)
+vim.api.nvim_set_current_buf(original_buffer)
+vim.wait(10)
+vim.api.nvim_buf_delete(next_buffer, { force = true })
+
+clear()
+input_listener("opaque callback", "]x")
+vim.api.nvim_buf_set_lines(0, -1, -1, false, { "added by bracket action" })
+vim.wait(10)
+equal(
+  {},
+  speech(),
+  "a nonmoving bracket action which changes text is not reported as unavailable"
+)
+
+clear()
+input_listener("]")
+input_listener("c")
+lector.say("navigation result")
+vim.wait(10)
+equal(
+  { "navigation result" },
+  speech(),
+  "another semantic result supersedes the unavailable-destination announcement"
+)
+
+clear()
 vim.cmd("normal! qq")
 equal({ "recording q" }, speech(), "macro recording start is announced")
 clear()

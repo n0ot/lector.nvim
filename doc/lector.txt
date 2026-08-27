@@ -75,8 +75,10 @@ announce_buffers
 
 announce_cursor
         Announce semantic character, word, WORD, and line destinations,
-        including bracket-prefixed motions. Entering characterwise Visual mode
-        announces the mode without repeating the character at the cursor.
+        including bracket-prefixed motions. A bracket-prefixed navigation that
+        has no distinct destination announces either "no previous item" or
+        "no next item". Entering characterwise Visual mode announces the mode
+        without repeating the character at the cursor.
 
 announce_deletions
         Announce where the cursor lands after Insert deletions and structured
@@ -151,6 +153,10 @@ announcements use |TextPutPost| when available and a change-verified keyboard
 fallback otherwise. Fold, search,
 quickfix, recording, spelling, diagnostic, command-line, message, and window
 state come from documented Neovim APIs and events.
+
+When a window or native context menu closes without causing another
+announcement, Lector says "closed". Closing a buffer instead announces the
+underlying buffer name.
 
 Actions which may display output send protocol end before Neovim processes the
 action. Visible output is left to ordinary terminal reading and is not

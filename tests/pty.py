@@ -142,6 +142,10 @@ def main() -> int:
             session.wait_for_event("unnamed buffer")
 
             session.clear()
+            session.send(b"]b")
+            session.wait_for_event("no next item")
+
+            session.clear()
             session.send(b"ione\rone\rone\x1b")
             session.clear()
             session.send(b"ggdd")
@@ -240,8 +244,9 @@ def main() -> int:
             session.pump(0.2)
             if any(event in {"one", "blank"} for event in session.events):
                 raise AssertionError(f"CTRL-W was interpreted as cursor motion: {session.events!r}")
+            session.clear()
             session.send(b":only\r")
-            session.pump(0.2)
+            session.wait_for_event("closed")
 
             session.clear()
             session.send(b"gg/one\r")
@@ -258,7 +263,7 @@ def main() -> int:
             else:
                 raise AssertionError(f"PTY menu item was not reachable: {session.events!r}")
             session.send(b"\r")
-            session.pump(0.2)
+            session.wait_for_event("closed")
             session.send(
                 b":lua require('lector').say(tostring(vim.g.lector_pty_menu))\r"
             )
@@ -279,6 +284,7 @@ def main() -> int:
             session.wait_for_event("end")
             session.send(b"\x1b\x1b")
             session.wait_for_event("set;auto=0;cursor=0")
+            session.wait_for_event("closed")
 
             session.clear()
             session.send(b":echo 'pty visible output'\r")

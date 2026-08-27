@@ -47,15 +47,15 @@ The plugin does not define key mappings.
 
 ## What it announces
 
-- Buffer names on entry, cursor motions, editor modes, indentation changes,
-  and Visual selections
+- Buffer names on entry, cursor motions and unavailable bracket-navigation
+  destinations, editor modes, indentation changes, and Visual selections
 - Character, word, or line destinations after matching deletion units, put
   summaries, numeric changes, folds, searches, spelling errors, and macro
   recording
 - Diagnostics, messages, quickfix and location-list entries, command-line
   editing, native completion, and optional Blink completion details
-- Informational floating windows, native context menus, and terminal-buffer
-  handoff
+- Informational floating windows, native context menus, otherwise silent
+  window and context-menu closures, and terminal-buffer handoff
 
 Input which may produce transient terminal output temporarily restores the
 screen reader's ordinary reading. This preserves Neovim's visual presentation
