@@ -160,6 +160,28 @@ def main() -> int:
             session.wait_for_event("no next item")
             session.send(b":nunmap Q\r")
 
+            session.send(b":let g:lector_cmdline_history_test = 1\r")
+            session.pump(0.2)
+            session.send(b":\x1b[A")
+            session.pump(0.2)
+            session.clear()
+            session.send(b"\x1b[D")
+            session.wait_for_event("1")
+            session.pump(0.2)
+            if session.events != ["1"] or b"Error in CursorMovedC" in session.output:
+                raise AssertionError(
+                    f"command-line left motion failed: events={session.events!r}"
+                )
+            session.clear()
+            session.send(b"\x1b[C")
+            session.wait_for_event("blank")
+            session.pump(0.2)
+            if session.events != ["blank"] or b"Error in CursorMovedC" in session.output:
+                raise AssertionError(
+                    f"command-line right motion failed: events={session.events!r}"
+                )
+            session.send(b"\x1b")
+
             session.send(b"atest\x1b")
             session.pump(0.2)
             session.clear()
