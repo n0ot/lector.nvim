@@ -74,7 +74,6 @@ local state = {
   cursor_announcement_generation = 0,
   window_scan_generation = 0,
   speech_generation = 0,
-  closed_announcement_generation = 0,
   lifecycle_generation = 0,
   deferred_timers = {},
   ui_select_original = nil,
@@ -205,28 +204,6 @@ local function defer_tracked(callback, timeout)
   return timer
 end
 
-local function schedule_closed_announcement()
-  if not state.enabled then
-    return
-  end
-  state.closed_announcement_generation = state.closed_announcement_generation + 1
-  local generation = state.closed_announcement_generation
-  local lifecycle_generation = state.lifecycle_generation
-  local speech_generation = state.speech_generation
-  -- Give announcements caused by the close, including a scheduled buffer
-  -- announcement, a complete event-loop turn to run first.
-  vim.schedule(function()
-    vim.schedule(function()
-      if lifecycle_is_current(lifecycle_generation)
-        and generation == state.closed_announcement_generation
-        and speech_generation == state.speech_generation
-      then
-        M.say("closed")
-      end
-    end)
-  end)
-end
-
 local context_menu = context_menu_module.new({
   activate = function() return M.activate() end,
   deactivate = function() return M.deactivate() end,
@@ -234,7 +211,6 @@ local context_menu = context_menu_module.new({
   menus = menus,
   options = function() return state.options end,
   say = function(text) return M.say(text) end,
-  schedule_closed = schedule_closed_announcement,
   suppress_cursor = function(timeout)
     local suppression = {}
     state.suppress_next_cursor = suppression
@@ -1579,7 +1555,6 @@ local function invalidate_deferred_work()
   state.buffer_announcement_generation = state.buffer_announcement_generation + 1
   state.cursor_announcement_generation = state.cursor_announcement_generation + 1
   state.window_scan_generation = state.window_scan_generation + 1
-  state.closed_announcement_generation = state.closed_announcement_generation + 1
   state.command_lines = {}
   state.command_line_active = false
   state.command_line_level = 0
@@ -1642,7 +1617,6 @@ function M.setup(options)
   state.message_history = read_message_history()
   state.buffer_announcement_generation = state.buffer_announcement_generation + 1
   state.cursor_announcement_generation = state.cursor_announcement_generation + 1
-  state.closed_announcement_generation = state.closed_announcement_generation + 1
 
   vim.api.nvim_create_augroup(group_name, { clear = true })
   create_autocmd({ "VimEnter", "UIEnter", "VimResume", "FocusGained" }, function()
@@ -1660,10 +1634,7 @@ function M.setup(options)
   create_autocmd("BufLeave", prepare_to_leave_terminal)
   create_autocmd({ "BufEnter", "WinEnter" }, schedule_buffer_announcement)
   create_autocmd("WinNew", announce_new_floating_windows)
-  create_autocmd("WinClosed", function(event)
-    forget_window(event)
-    schedule_closed_announcement()
-  end)
+  create_autocmd("WinClosed", forget_window)
   create_autocmd({ "CursorMoved", "CursorMovedI" }, function(event)
     schedule_cursor_announcement(event.event)
   end)

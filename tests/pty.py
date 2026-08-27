@@ -386,7 +386,9 @@ def main() -> int:
                 raise AssertionError(f"CTRL-W was interpreted as cursor motion: {session.events!r}")
             session.clear()
             session.send(b":only\r")
-            session.wait_for_event("closed")
+            session.pump(0.2)
+            if "closed" in session.events:
+                raise AssertionError(f"window close was announced: {session.events!r}")
 
             session.clear()
             session.send(b"gg/one\r")
@@ -402,8 +404,11 @@ def main() -> int:
                     break
             else:
                 raise AssertionError(f"PTY menu item was not reachable: {session.events!r}")
+            session.clear()
             session.send(b"\r")
-            session.wait_for_event("closed")
+            session.pump(0.2)
+            if "closed" in session.events:
+                raise AssertionError(f"context menu close was announced: {session.events!r}")
             session.send(
                 b":lua require('lector').say(tostring(vim.g.lector_pty_menu))\r"
             )
@@ -424,7 +429,9 @@ def main() -> int:
             session.wait_for_event("end")
             session.send(b"\x1b\x1b")
             session.wait_for_event("set;auto=0;cursor=0")
-            session.wait_for_event("closed")
+            session.pump(0.2)
+            if "closed" in session.events:
+                raise AssertionError(f"submenu close was announced: {session.events!r}")
 
             session.clear()
             session.send(b":echo 'pty visible output'\r")

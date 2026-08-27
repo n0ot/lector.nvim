@@ -60,8 +60,8 @@ replace the previous callbacks, deferred work, commands, and autocmds.
   recording
 - Diagnostics, messages, quickfix and location-list entries, command-line
   editing, native completion, and optional Blink completion details
-- Informational floating windows, native context menus, otherwise silent
-  window and context-menu closures, and terminal-buffer handoff
+- Informational floating windows, native context menus, and terminal-buffer
+  handoff
 
 Input which may produce transient terminal output temporarily restores the
 screen reader's ordinary reading. This preserves Neovim's visual presentation

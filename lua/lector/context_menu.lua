@@ -67,7 +67,6 @@ function M.new(dependencies)
     options = assert(dependencies.options),
     popup = nil,
     say = assert(dependencies.say),
-    schedule_closed = assert(dependencies.schedule_closed),
     submenu_keys = submenu_keys,
     suppress_cursor = assert(dependencies.suppress_cursor),
     escape = vim.api.nvim_replace_termcodes("<Esc>", true, false, true),
@@ -101,7 +100,6 @@ function ContextMenu:open(event)
     end
     local activation_path = popup.activation_path
     self:reset()
-    self.schedule_closed()
     if activation_path then
       local ok, err = pcall(vim.api.nvim_cmd, {
         cmd = "emenu",

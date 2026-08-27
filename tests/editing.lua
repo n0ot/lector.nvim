@@ -403,11 +403,7 @@ equal(
   vim.g.lector_popup_choice,
   "Enter activates the exact selected context-menu item"
 )
-equal(
-  { "closed" },
-  speech(),
-  "a context-menu close is announced after a silent activation"
-)
+equal({}, speech(), "a context-menu close is silent after a silent activation")
 
 vim.cmd(
   "nnoremenu 10.25 PopUp.Announced <Cmd>lua require('lector').say('menu action')<CR>"
@@ -424,7 +420,7 @@ vim.wait(10)
 equal(
   { "menu action" },
   speech(),
-  "a context-menu action announcement supersedes the close announcement"
+  "a context-menu action announcement remains available after the menu closes"
 )
 
 vim.cmd("nnoremenu 90.10 PopUp.Parent.Child <Nop>")
@@ -463,11 +459,7 @@ assert(ended(), "submenus should return to ordinary terminal tracking")
 assert(not lector.health_info().active, "semantic mode stayed active inside a native submenu")
 vim.wait(10)
 assert(lector.health_info().active, "semantic mode did not resume after the menu closed")
-equal(
-  { "closed" },
-  speech(),
-  "a native submenu close is announced when nothing follows it"
-)
+equal({}, speech(), "a native submenu close is silent when nothing follows it")
 
 lector.teardown()
 
@@ -549,7 +541,7 @@ equal({ "hover detail" }, speech(), "informational floating windows remain reada
 clear()
 vim.api.nvim_win_close(hover_window, true)
 vim.wait(20)
-equal({ "closed" }, speech(), "closing a floating window is announced")
+equal({}, speech(), "closing a floating window is silent")
 
 vim.cmd("new")
 vim.api.nvim_buf_set_name(0, "/private/tmp/lector-closing-window-test.lua")
@@ -560,7 +552,7 @@ vim.wait(20)
 equal(
   { "lector-buffer-announcement-test.lua" },
   speech(),
-  "the underlying buffer name supersedes a window-close announcement"
+  "closing a window announces the destination buffer"
 )
 
 vim.cmd("enew")
@@ -572,7 +564,7 @@ vim.wait(20)
 equal(
   { "lector-buffer-announcement-test.lua" },
   speech(),
-  "closing a buffer reads the underlying buffer without also saying closed"
+  "closing a buffer announces the destination buffer"
 )
 
 clear()

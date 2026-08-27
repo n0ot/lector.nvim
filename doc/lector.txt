@@ -172,9 +172,9 @@ expansions have no semantic meaning to lector.nvim. Fold, search, quickfix,
 recording, spelling, diagnostic, command-line, message, and window state come
 from documented Neovim APIs and events.
 
-When a window or native context menu closes without causing another
-announcement, lector.nvim requests speech saying "closed". Closing a buffer
-instead announces the underlying buffer name.
+Window and menu closure is silent. When a close moves focus to another editor
+context, the destination is announced through the ordinary window- or
+buffer-entry semantics instead of describing the implementation-level close.
 
 Actions which may display output send protocol end before Neovim processes the
 action. Visible output is left to ordinary terminal reading and is not
