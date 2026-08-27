@@ -4,7 +4,7 @@ set -eu
 test_state=$(mktemp -d "${TMPDIR:-/tmp}/lector.nvim-tests.XXXXXX")
 trap 'rm -rf "$test_state"' EXIT HUP INT TERM
 
-for suite in completion editing command_output semantics; do
+for suite in completion editing command_output semantics reload; do
   XDG_STATE_HOME="$test_state" nvim --headless -u NONE -i NONE -n \
     -l "tests/$suite.lua"
 done

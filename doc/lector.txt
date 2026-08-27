@@ -32,8 +32,10 @@ Add n0ot/lector.nvim to 'runtimepath', then call: >lua
 <
 setup() returns false and remains inert when |nvim_ui_send()| is unavailable.
 Calling setup() again replaces the previous configuration and autocmd group.
+Reloading the Lua module first tears down the previous active instance, so
+plugin updates can safely replace it within the same Neovim process.
 
-To stop and remove listeners programmatically: >lua
+To stop and remove listeners and commands programmatically: >lua
 
     require("lector").teardown()
 <

@@ -45,6 +45,9 @@ With lazy.nvim:
 
 The plugin does not define key mappings.
 
+`setup()` is reload-safe: repeated setup and in-process Lua module reloads
+replace the previous callbacks, deferred work, commands, and autocmds.
+
 ## What it announces
 
 - Buffer names on entry, cursor motions and unavailable bracket-navigation

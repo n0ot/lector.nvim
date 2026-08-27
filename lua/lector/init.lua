@@ -7,6 +7,15 @@ local maximum_speech_bytes = 2000
 local floating_window_scan_interval_ms = 50
 local floating_window_scan_duration_ms = 1000
 local group_name = "LectorApplicationAccessibility"
+local instance_registry = debug.getregistry()
+local instance_registry_key = "lector.nvim.active_instance"
+local user_command_names = {
+  "LectorSay",
+  "LectorAccessibilityEnable",
+  "LectorAccessibilityDisable",
+  "LectorCompletionDocumentation",
+  "LectorStatus",
+}
 
 local state = {
   enabled = false,
@@ -58,6 +67,8 @@ local state = {
   window_scan_generation = 0,
   speech_generation = 0,
   closed_announcement_generation = 0,
+  lifecycle_generation = 0,
+  deferred_timers = {},
 }
 
 local defaults = {
@@ -198,18 +209,44 @@ function M.say(text)
   return send_speech(text)
 end
 
+local function lifecycle_is_current(generation)
+  return state.enabled and generation == state.lifecycle_generation
+end
+
+local function cancel_deferred_timers()
+  for timer in pairs(state.deferred_timers) do
+    pcall(timer.stop, timer)
+    local ok, closing = pcall(timer.is_closing, timer)
+    if not ok or not closing then
+      pcall(timer.close, timer)
+    end
+  end
+  state.deferred_timers = {}
+end
+
+local function defer_tracked(callback, timeout)
+  local timer
+  timer = vim.defer_fn(function()
+    state.deferred_timers[timer] = nil
+    callback()
+  end, timeout)
+  state.deferred_timers[timer] = true
+  return timer
+end
+
 local function schedule_closed_announcement()
   if not state.enabled then
     return
   end
   state.closed_announcement_generation = state.closed_announcement_generation + 1
   local generation = state.closed_announcement_generation
+  local lifecycle_generation = state.lifecycle_generation
   local speech_generation = state.speech_generation
   -- Give announcements caused by the close, including a scheduled buffer
   -- announcement, a complete event-loop turn to run first.
   vim.schedule(function()
     vim.schedule(function()
-      if state.enabled
+      if lifecycle_is_current(lifecycle_generation)
         and generation == state.closed_announcement_generation
         and speech_generation == state.speech_generation
       then
@@ -1067,8 +1104,9 @@ local function schedule_edit_destination(buffer, destination_kind, previous)
     return
   end
   state.edit_destination_ticks[buffer] = tick
+  local lifecycle_generation = state.lifecycle_generation
   vim.schedule(function()
-    if not state.enabled then
+    if not lifecycle_is_current(lifecycle_generation) then
       return
     end
     local current = snapshot()
@@ -1677,7 +1715,7 @@ local function schedule_blink_completion_refresh()
   state.blink_refresh_generation = state.blink_refresh_generation + 1
   local generation = state.blink_refresh_generation
   for _, delay in ipairs({ 0, 20, 100, 250 }) do
-    vim.defer_fn(function()
+    defer_tracked(function()
       if state.enabled
         and state.blink_menu_open
         and generation == state.blink_refresh_generation
@@ -1785,7 +1823,11 @@ local function schedule_message_poll()
     return
   end
   state.message_poll_scheduled = true
+  local lifecycle_generation = state.lifecycle_generation
   vim.schedule(function()
+    if not lifecycle_is_current(lifecycle_generation) then
+      return
+    end
     state.message_poll_scheduled = false
     poll_messages()
   end)
@@ -1862,8 +1904,12 @@ local function typed_bracket_motion_direction(typed_key)
 end
 
 local function schedule_failed_cursor_motion(motion)
+  local lifecycle_generation = state.lifecycle_generation
   vim.schedule(function()
     vim.schedule(function()
+      if not lifecycle_is_current(lifecycle_generation) then
+        return
+      end
       if state.pending_cursor_motion ~= motion then
         return
       end
@@ -2547,10 +2593,13 @@ local function attach_input_listener()
         local pending = {
           navigation = navigation,
           level = state.command_line_level,
+          lifecycle_generation = state.lifecycle_generation,
         }
         state.pending_command_navigation = pending
         vim.schedule(function()
-          if state.enabled then
+          if state.pending_command_navigation == pending
+            and lifecycle_is_current(pending.lifecycle_generation)
+          then
             announce_current_command_line(pending.navigation, pending.level)
           end
           if state.pending_command_navigation == pending then
@@ -2572,8 +2621,11 @@ local ignored_floating_window_filetypes = {
 }
 
 local function announce_floating_windows(windows)
+  local lifecycle_generation = state.lifecycle_generation
   vim.schedule(function()
-    if not state.enabled or not state.options.announce_floating_windows then
+    if not lifecycle_is_current(lifecycle_generation)
+      or not state.options.announce_floating_windows
+    then
       return
     end
     if state.blink_menu_open then
@@ -2661,7 +2713,7 @@ schedule_floating_window_scan = function()
       return
     end
     checks_remaining = checks_remaining - 1
-    vim.defer_fn(scan, floating_window_scan_interval_ms)
+    defer_tracked(scan, floating_window_scan_interval_ms)
   end
   vim.schedule(scan)
 end
@@ -2699,10 +2751,53 @@ function M.health_info()
   }
 end
 
+local function invalidate_deferred_work()
+  cancel_deferred_timers()
+  state.lifecycle_generation = state.lifecycle_generation + 1
+  state.blink_refresh_generation = state.blink_refresh_generation + 1
+  state.search_announcement_generation = state.search_announcement_generation + 1
+  state.fold_observation_generation = state.fold_observation_generation + 1
+  state.buffer_announcement_generation = state.buffer_announcement_generation + 1
+  state.window_scan_generation = state.window_scan_generation + 1
+  state.closed_announcement_generation = state.closed_announcement_generation + 1
+  state.pending_command_navigation = nil
+  state.command_lines = {}
+  state.command_line_active = false
+  state.command_line_level = 0
+  state.pending_cursor_motion = nil
+  state.cursor_motion_prefix = nil
+  state.pending_value_change = nil
+  state.pending_text_change = nil
+  state.pending_put = nil
+  state.put_prefix = nil
+  state.pending_insert_diagnostics = {}
+  state.suppress_next_cursor = nil
+  state.suppress_edit_cursor = false
+  state.suppress_visual_delete_mode_return = nil
+  state.suppress_prompt_mode_return = nil
+  state.recent_list_destination = nil
+  state.search_wrapped = false
+  state.terminal_fallback = false
+  state.terminal_command_line = false
+  state.command_output_fallback = false
+  state.discard_pending_messages = false
+  state.message_poll_scheduled = false
+end
+
 function M.setup(options)
   if type(vim.api.nvim_ui_send) ~= "function" then
     return false
   end
+  local previous_instance = instance_registry[instance_registry_key]
+  if previous_instance ~= nil
+    and previous_instance ~= M
+    and type(previous_instance.teardown) == "function"
+  then
+    pcall(previous_instance.teardown)
+  end
+  instance_registry[instance_registry_key] = M
+  cancel_deferred_timers()
+  state.lifecycle_generation = state.lifecycle_generation + 1
   detach_input_listener()
   state.options = vim.tbl_extend("force", defaults, options or {})
   state.enabled = true
@@ -2744,10 +2839,10 @@ function M.setup(options)
   state.last_spelling = nil
   state.diagnostic_announcements = {}
   state.recent_list_destination = nil
-  state.search_announcement_generation = 0
+  state.search_announcement_generation = state.search_announcement_generation + 1
   state.search_wrapped = false
   state.list_selections = {}
-  state.fold_observation_generation = 0
+  state.fold_observation_generation = state.fold_observation_generation + 1
   state.message_poll_scheduled = false
   state.message_history = read_message_history()
   state.buffer_announcement_generation = state.buffer_announcement_generation + 1
@@ -2803,8 +2898,9 @@ function M.setup(options)
     end
   end)
   create_autocmd("QuickFixCmdPost", function()
+    local lifecycle_generation = state.lifecycle_generation
     vim.schedule(function()
-      if state.enabled then
+      if lifecycle_is_current(lifecycle_generation) then
         local current = snapshot()
         if current then
           announce_selected_list_destination(current)
@@ -2841,11 +2937,13 @@ function M.setup(options)
     local restore_terminal_fallback = state.terminal_command_line
       and not state.command_line_active
     if restore_terminal_fallback then
+      local lifecycle_generation = state.lifecycle_generation
       vim.schedule(function()
-        state.terminal_command_line = false
-        if state.enabled then
-          M.activate()
+        if not lifecycle_is_current(lifecycle_generation) then
+          return
         end
+        state.terminal_command_line = false
+        M.activate()
       end)
     elseif command_executed and not state.command_line_active then
       state.command_output_fallback = true
@@ -2858,8 +2956,11 @@ function M.setup(options)
       schedule_search_announcement()
     end
     if state.command_line_active then
+      local lifecycle_generation = state.lifecycle_generation
       vim.schedule(function()
-        remember_command_line(state.command_line_level)
+        if lifecycle_is_current(lifecycle_generation) then
+          remember_command_line(state.command_line_level)
+        end
       end)
     end
   end)
@@ -2877,8 +2978,9 @@ function M.setup(options)
     group = group_name,
     pattern = { "BlinkCmpListSelect", "BlinkCmpShow" },
     callback = function()
+      local lifecycle_generation = state.lifecycle_generation
       vim.schedule(function()
-        if state.enabled and state.blink_menu_open then
+        if lifecycle_is_current(lifecycle_generation) and state.blink_menu_open then
           refresh_blink_completion()
         end
       end)
@@ -2890,17 +2992,18 @@ function M.setup(options)
 
   pcall(vim.api.nvim_create_user_command, "LectorSay", function(command)
     M.say(command.args)
-  end, { nargs = "+" })
+  end, { nargs = "+", force = true })
   pcall(vim.api.nvim_create_user_command, "LectorAccessibilityEnable", function()
     state.message_history = read_message_history()
     state.enabled = true
     M.activate()
-  end, {})
+  end, { force = true })
   pcall(vim.api.nvim_create_user_command, "LectorAccessibilityDisable", function()
+    state.enabled = false
+    invalidate_deferred_work()
     close_all_menus()
     M.deactivate()
-    state.enabled = false
-  end, {})
+  end, { force = true })
   pcall(vim.api.nvim_create_user_command, "LectorCompletionDocumentation", function()
     if state.blink_menu_open then
       refresh_blink_completion()
@@ -2910,13 +3013,14 @@ function M.setup(options)
       refresh_native_completion()
     end
     M.read_menu_documentation()
-  end, {})
+  end, { force = true })
   pcall(vim.api.nvim_create_user_command, "LectorStatus", function()
     M.announce_status()
-  end, {})
+  end, { force = true })
 
+  local lifecycle_generation = state.lifecycle_generation
   vim.schedule(function()
-    if state.enabled then
+    if lifecycle_is_current(lifecycle_generation) then
       M.activate()
       announce_buffer()
     end
@@ -2925,12 +3029,20 @@ function M.setup(options)
 end
 
 function M.teardown()
-  state.closed_announcement_generation = state.closed_announcement_generation + 1
+  local owns_registrations = instance_registry[instance_registry_key] == M
+  state.enabled = false
+  invalidate_deferred_work()
   close_all_menus()
   M.deactivate()
-  state.enabled = false
+  if not owns_registrations then
+    return
+  end
   detach_input_listener()
   pcall(vim.api.nvim_del_augroup_by_name, group_name)
+  for _, name in ipairs(user_command_names) do
+    pcall(vim.api.nvim_del_user_command, name)
+  end
+  instance_registry[instance_registry_key] = nil
 end
 
 return M
