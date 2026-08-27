@@ -185,11 +185,13 @@ equal(
 clear()
 vim.api.nvim_win_set_cursor(0, { 1, 0 })
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+vim.wait(10)
 equal({}, speech(), "InsertLeave cursor adjustment remains quiet")
 
 clear()
 vim.api.nvim_win_set_cursor(0, { 1, 1 })
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+vim.wait(10)
 equal({ "c" }, speech(), "the next deliberate character motion remains audible")
 
 clear()
@@ -238,7 +240,7 @@ vim.api.nvim_get_option_value = function(name, options)
 end
 assert(not lector.say("hidden semantic speech"))
 vim.api.nvim_get_option_value = original_get_option_value
-equal({}, speech(), "terminal buffers restore Lector's ordinary fallback")
+equal({}, speech(), "terminal buffers restore the terminal screen reader fallback")
 
 clear()
 assert(lector.say("semantic speech restored"))
@@ -476,4 +478,4 @@ equal({}, speech(), "which-key's visual layout is not flattened into speech")
 vim.api.nvim_win_close(which_key_window, true)
 lector.teardown()
 restore()
-print("lector Neovim editing tests passed")
+print("lector.nvim editing tests passed")

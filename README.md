@@ -1,9 +1,11 @@
 # lector.nvim
 
 `lector.nvim` adds semantic accessibility to Neovim without changing its
-visual interface or replacing its mappings. It emits the versioned Lector
-application-accessibility protocol to the host terminal, where Lector—or any
-compatible terminal screen reader—can speak the result.
+visual interface or replacing its mappings. It is an independent protocol
+producer, not a component of the Lector terminal screen reader. It emits the
+versioned Lector application-accessibility protocol to the host terminal,
+where Lector—or any other compatible terminal screen reader—can speak the
+result.
 
 The plugin is optional and fails safely. Without it, or when its required
 Neovim API is unavailable, the terminal screen reader retains its ordinary
@@ -50,8 +52,9 @@ replace the previous callbacks, deferred work, commands, and autocmds.
 
 ## What it announces
 
-- Buffer names on entry, cursor motions and unavailable bracket-navigation
-  destinations, editor modes, indentation changes, and Visual selections
+- Buffer names on entry, cursor destinations and unavailable provider-declared
+  navigation destinations, editor modes, indentation changes, and Visual
+  selections
 - Character, word, or line destinations after matching deletion units, put
   summaries, numeric changes, folds, searches, spelling errors, and macro
   recording
@@ -75,7 +78,7 @@ reference.
 - `:LectorCompletionDocumentation` reads documentation for the selected
   completion item when available.
 - `:LectorAccessibilityEnable` and `:LectorAccessibilityDisable` control the
-  client explicitly.
+  plugin explicitly.
 - `:checkhealth lector` reports compatibility and current state.
 
 ## Configuration
@@ -110,6 +113,23 @@ require("lector").setup({
 Other plugins can publish provider-neutral menu state through `update_menu()`
 and `close_menu()`. The core does not need to know which keys or UI provider
 changed the selection.
+
+Provider-owned navigation can similarly report its semantic intent without
+exposing a mapping. `observe_navigation()` runs an action and requests “no
+previous item” or “no next item” only if the editor state remains unchanged:
+
+```lua
+local accessibility = require("lector")
+
+accessibility.observe_navigation("next", function()
+  provider.goto_next_item()
+end)
+```
+
+`observe_search()` wraps provider-owned search navigation so match position
+is announced from Neovim's resulting search state. Successful cursor and text
+changes otherwise come directly from Neovim events and before/after state;
+lector.nvim does not interpret normal-mode keys or mapping expansions.
 
 ## Testing
 

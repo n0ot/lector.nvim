@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise Lector's Neovim client through a real TUI and native popup loop."""
+"""Exercise lector.nvim through a real TUI and native popup loop."""
 
 from __future__ import annotations
 
@@ -141,9 +141,14 @@ def main() -> int:
         try:
             session.wait_for_event("unnamed buffer")
 
+            session.send(
+                b":lua vim.keymap.set('n','Q',function() "
+                b"require('lector').observe_navigation('next',function() end) end)\r"
+            )
             session.clear()
-            session.send(b"]b")
+            session.send(b"Q")
             session.wait_for_event("no next item")
+            session.send(b":nunmap Q\r")
 
             session.clear()
             session.send(b"ione\rone\rone\x1b")
@@ -302,7 +307,7 @@ def main() -> int:
         finally:
             session.close()
 
-    print("lector Neovim PTY tests passed")
+    print("lector.nvim PTY tests passed")
     return 0
 
 

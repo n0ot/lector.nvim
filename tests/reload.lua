@@ -195,4 +195,4 @@ local autocmd_ok = pcall(vim.api.nvim_get_autocmds, {
 assert(not autocmd_ok, "teardown left its autocmd group installed")
 
 restore()
-print("lector Neovim reload tests passed")
+print("lector.nvim reload tests passed")

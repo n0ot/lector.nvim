@@ -75,7 +75,7 @@ assert(lector.setup({
   announce_messages = false,
   announce_floating_windows = false,
   announce_command_line = false,
-  announce_value_changes = false,
+  announce_value_changes = true,
   announce_puts = true,
   announce_folds = true,
   announce_search = true,
@@ -106,10 +106,10 @@ local simulated_mode = "n"
 vim.api.nvim_get_mode = function()
   return { mode = simulated_mode, blocking = false }
 end
-input_listener("d")
+input_listener("opaque input")
 simulated_mode = "o"
-input_listener("a")
-input_listener("w")
+input_listener("opaque input")
+input_listener("opaque input")
 vim.api.nvim_get_mode = original_get_mode
 vim.cmd("normal! daw")
 vim.wait(10)
@@ -137,7 +137,7 @@ vim.api.nvim_buf_set_lines(0, 0, -1, false, { "anchor" })
 vim.api.nvim_win_set_cursor(0, { 1, 0 })
 vim.fn.setreg('"', { "pasted line" }, "V")
 clear()
-input_listener("p")
+input_listener("opaque input")
 vim.cmd("normal! p")
 vim.wait(10)
 equal({ "pasted 1 line" }, speech(), "put fallback reports linewise register contents")
@@ -152,6 +152,7 @@ vim.wait(10)
 clear()
 vim.api.nvim_win_set_cursor(0, { 1, 0 })
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+vim.wait(10)
 equal(
   { "folded, 2 lines" },
   speech(),
@@ -159,8 +160,7 @@ equal(
 )
 
 clear()
-input_listener("z")
-input_listener("o")
+input_listener("opaque input")
 vim.cmd("normal! zo")
 vim.wait(10)
 equal({ "fold opened" }, speech(), "opening a fold without moving the cursor is announced")
@@ -172,15 +172,17 @@ vim.fn.setreg("/", "one")
 vim.api.nvim_exec_autocmds("BufEnter", { buffer = 0, modeline = false })
 vim.wait(10)
 clear()
-input_listener("n")
-vim.cmd("normal! n")
+lector.observe_search(function()
+  vim.cmd("normal! n")
+end)
 vim.wait(10)
 equal({ "2 of 3" }, speech(), "search navigation announces match position")
 
 vim.api.nvim_win_set_cursor(0, { 2, 0 })
 clear()
-input_listener("n")
-vim.cmd("normal! n")
+lector.observe_search(function()
+  vim.cmd("normal! n")
+end)
 vim.wait(10)
 equal({ "1 of 3, wrapped" }, speech(), "wrapped search is announced once")
 
@@ -202,6 +204,7 @@ vim.wait(10)
 clear()
 vim.api.nvim_win_set_cursor(0, { 2, 0 })
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+vim.wait(10)
 equal(
   {
     "error, bad value, lector-semantics.lua, line 2, 1 of 1",
@@ -226,6 +229,7 @@ vim.fn.setloclist(0, {}, "r", {
 clear()
 vim.api.nvim_win_set_cursor(0, { 1, 0 })
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+vim.wait(10)
 equal(
   {
     "warning, local warning, lector-semantics.lua, line 1, 1 of 1",
@@ -251,6 +255,7 @@ vim.api.nvim_exec_autocmds("CursorMoved", {
   buffer = vim.api.nvim_get_current_buf(),
   modeline = false,
 })
+vim.wait(10)
 equal(
   { "warning, second problem, lector-semantics.lua, line 2, 2 of 2" },
   semantic_text(),
@@ -267,18 +272,18 @@ vim.api.nvim_win_set_cursor(0, { 1, 0 })
 vim.api.nvim_exec_autocmds("BufEnter", { buffer = 0, modeline = false })
 vim.wait(10)
 clear()
-input_listener("]")
-input_listener("s")
 vim.api.nvim_win_set_cursor(0, { 1, 4 })
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+vim.wait(10)
 equal(
-  { "quik" },
+  { "misspelled, quik" },
   speech(),
-  "a bracket spelling motion announces its destination word"
+  "a cursor destination announces its spelling state without inspecting input"
 )
 clear()
 vim.api.nvim_win_set_cursor(0, { 1, 5 })
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+vim.wait(10)
 equal({ "u" }, speech(), "movement within the same misspelling does not repeat its status")
 vim.wo.spell = false
 
@@ -287,32 +292,41 @@ vim.api.nvim_win_set_cursor(0, { 1, 0 })
 vim.api.nvim_exec_autocmds("BufEnter", { buffer = 0, modeline = false })
 vim.wait(10)
 clear()
-input_listener("]")
-input_listener("c")
-vim.api.nvim_win_set_cursor(0, { 2, 0 })
-vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+lector.observe_navigation("next", function()
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+end)
+vim.wait(10)
 equal(
   { "second" },
   semantic_text(),
-  "a generic bracket command tracks its resulting line motion"
+  "an observed navigation uses its resulting cursor geometry"
 )
 
 clear()
-input_listener("]")
-input_listener("c")
+local navigation_result = lector.observe_navigation("next", function()
+  return "provider result"
+end)
+equal(
+  "provider result",
+  navigation_result,
+  "navigation observation preserves the provider's return value"
+)
 vim.wait(10)
 equal(
   { "no next item" },
   speech(),
-  "a bracket navigation with no distinct destination is announced"
+  "an observed navigation with no distinct destination is announced"
 )
 
 vim.api.nvim_win_set_cursor(0, { 1, 0 })
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+vim.wait(10)
 clear()
-input_listener("opaque callback", "]c")
-vim.api.nvim_win_set_cursor(0, { 2, 0 })
-input_listener("opaque callback", "]c")
+lector.observe_navigation("next", function()
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+end)
+lector.observe_navigation("next", function() end)
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
 vim.wait(10)
 equal(
@@ -323,26 +337,66 @@ equal(
 equal(
   { "no next item" },
   speech(),
-  "a rapid failed bracket navigation survives the prior cursor event"
+  "a rapid failed navigation survives the prior cursor event"
+)
+
+clear()
+local command_looking_input = {
+  { "f", "]f" },
+  { "s", "]s" },
+  { "b", "[b" },
+  { "p", "p" },
+  { "n", "n" },
+  { "g", "g" },
+  { "d", "d" },
+  { "x", "x" },
+  { "\1", "\1" },
+  { "\24", "\24" },
+}
+for _, input in ipairs(command_looking_input) do
+  input_listener(input[1], input[2])
+end
+vim.wait(10)
+equal(
+  {},
+  speech(),
+  "literal input and mapping expansions have no editor-command semantics"
+)
+
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "value 9" })
+vim.api.nvim_win_set_cursor(0, { 1, 6 })
+vim.api.nvim_exec_autocmds("BufEnter", { buffer = 0, modeline = false })
+vim.wait(10)
+clear()
+input_listener("opaque input")
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "value 10" })
+vim.api.nvim_exec_autocmds("TextChanged", { buffer = 0, modeline = false })
+vim.wait(10)
+equal(
+  { "10" },
+  speech(),
+  "numeric changes are detected from their text effect without inspecting input"
 )
 
 vim.api.nvim_win_set_cursor(0, { 1, 0 })
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+vim.wait(10)
 clear()
-input_listener("opaque callback", "[b")
+lector.observe_navigation("previous", function() end)
 vim.wait(10)
 equal(
   { "no previous item" },
   speech(),
-  "an opaque mapping callback retains its typed bracket-navigation direction"
+  "an observed provider navigation retains its semantic direction"
 )
 
 local original_buffer = vim.api.nvim_get_current_buf()
 local next_buffer = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_buf_set_name(next_buffer, "/private/tmp/lector-next-buffer.lua")
 clear()
-input_listener("opaque callback", "]b")
-vim.api.nvim_set_current_buf(next_buffer)
+lector.observe_navigation("next", function()
+  vim.api.nvim_set_current_buf(next_buffer)
+end)
 vim.wait(10)
 equal(
   {},
@@ -354,18 +408,18 @@ vim.wait(10)
 vim.api.nvim_buf_delete(next_buffer, { force = true })
 
 clear()
-input_listener("opaque callback", "]x")
-vim.api.nvim_buf_set_lines(0, -1, -1, false, { "added by bracket action" })
+lector.observe_navigation("next", function()
+  vim.api.nvim_buf_set_lines(0, -1, -1, false, { "added by provider action" })
+end)
 vim.wait(10)
 equal(
   {},
   speech(),
-  "a nonmoving bracket action which changes text is not reported as unavailable"
+  "a nonmoving provider action which changes text is not reported as unavailable"
 )
 
 clear()
-input_listener("]")
-input_listener("c")
+lector.observe_navigation("next", function() end)
 lector.say("navigation result")
 vim.wait(10)
 equal(
@@ -373,6 +427,16 @@ equal(
   speech(),
   "another semantic result supersedes the unavailable-destination announcement"
 )
+
+clear()
+local navigation_ok, navigation_error = pcall(function()
+  lector.observe_navigation("next", function()
+    error("provider failure")
+  end)
+end)
+assert(not navigation_ok and navigation_error:find("provider failure", 1, true))
+vim.wait(10)
+equal({}, speech(), "a failed provider action is rethrown without stale navigation speech")
 
 clear()
 vim.cmd("normal! qq")
@@ -405,4 +469,4 @@ vim.cmd("normal! \27")
 
 lector.teardown()
 restore()
-print("lector Neovim semantic tests passed")
+print("lector.nvim semantic tests passed")

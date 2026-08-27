@@ -206,4 +206,4 @@ equal({ "no completion selected" }, speech(), "Blink close clears selection")
 
 lector.teardown()
 vim.api.nvim_ui_send = original_ui_send
-print("lector Neovim completion tests passed")
+print("lector.nvim completion tests passed")

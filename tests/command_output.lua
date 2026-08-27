@@ -110,7 +110,7 @@ clear()
 enter_command_line()
 clear()
 leave_command_line(false)
-equal({ "end" }, protocol_commands(), "executed Ex command enables ordinary Lector reading")
+equal({ "end" }, protocol_commands(), "executed Ex command enables ordinary terminal reading")
 
 input_listener("x")
 vim.api.nvim_exec_autocmds("TextChanged", { modeline = false })
@@ -187,12 +187,13 @@ clear()
 enter_command_line()
 clear()
 leave_command_line(false)
-input_listener("q")
+input_listener("opaque input")
+mode = "n"
 vim.wait(20)
 equal(
   { "end", "set;auto=0;cursor=0" },
   protocol_commands(),
-  "quitting a pager restores semantic policy before the editor redraws"
+  "leaving a pager restores semantic policy without inspecting its dismissal key"
 )
 
 mode = "n"
@@ -260,4 +261,4 @@ equal(
 )
 lector.teardown()
 restore()
-print("lector Neovim command output tests passed")
+print("lector.nvim command output tests passed")

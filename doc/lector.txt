@@ -8,20 +8,21 @@ CONTENTS                                                    *lector.nvim*
 3. Commands                                              |lector-commands|
 4. Options                                                |lector-options|
 5. Behavior                                              |lector-behavior|
-6. Completion API                                 |lector-completion-api|
+6. Provider APIs                                    |lector-provider-api|
 7. Compatibility                                  |lector-compatibility|
 
 ==============================================================================
 1. Introduction                                      *lector-introduction*
 
-lector.nvim sends semantic editor information through the versioned Lector
-application-accessibility protocol. Lector and compatible terminal screen
-readers can use it instead of inferring full-screen editor behavior from
+lector.nvim is an independent producer of semantic editor information. It is
+not a component of the Lector terminal screen reader. It sends the versioned
+Lector application-accessibility protocol so Lector and other compatible
+terminal screen readers can consume editor state without inferring it from
 terminal cells and cursor motion.
 
-The plugin does not define mappings or replace Neovim's visual UI. It yields to
-ordinary terminal reading for transient output, nested terminal applications,
-and terminal buffers.
+The plugin does not define mappings or replace Neovim's visual UI. It yields
+to ordinary terminal reading for transient output, nested terminal
+applications, and terminal buffers.
 
 ==============================================================================
 2. Setup                                                    *lector-setup*
@@ -58,11 +59,11 @@ To stop and remove listeners and commands programmatically: >lua
 
                                 *:LectorAccessibilityEnable*
 :LectorAccessibilityEnable
-        Enable the client and reassert semantic policy.
+        Enable lector.nvim and reassert semantic policy.
 
                                *:LectorAccessibilityDisable*
 :LectorAccessibilityDisable
-        Send protocol end, close semantic menus, and disable the client.
+        Send protocol end, close semantic menus, and disable lector.nvim.
 
 Use |:checkhealth| lector to inspect compatibility and current state.
 
@@ -76,18 +77,18 @@ announce_buffers
         separate cursor-motion behavior.
 
 announce_cursor
-        Announce semantic character, word, WORD, and line destinations,
-        including bracket-prefixed motions. A bracket-prefixed navigation that
-        has no distinct destination announces either "no previous item" or
-        "no next item". Entering characterwise Visual mode announces the mode
-        without repeating the character at the cursor.
+        Announce cursor destinations from the resulting editor geometry. A
+        provider-declared navigation that has no distinct destination
+        announces either "no previous item" or "no next item". Entering
+        characterwise Visual mode announces the mode without repeating the
+        character at the cursor.
 
 announce_deletions
         Announce where the cursor lands after Insert deletions and structured
-        operator edits. The destination is read as a character for
-        characterwise edits, a word for word motions and text objects, or a
-        line for linewise edits. A characterwise Visual deletion reads its
-        resulting character. Deleted contents are not spoken.
+        edits. Linewise, blockwise, and Visual metadata is taken from Neovim;
+        other destinations are inferred from the resulting edit geometry. A
+        characterwise Visual deletion reads its resulting character. Deleted
+        contents are not spoken.
 
 announce_diagnostics
         Announce changed diagnostics when entering or revisiting a diagnosed
@@ -109,7 +110,7 @@ announce_command_line
         Announce command-line type, movement, history, and completion.
 
 announce_value_changes
-        Announce values changed by CTRL-A and CTRL-X families.
+        Announce numeric values changed by normal-mode text operations.
 
 announce_puts
         Announce put text or a concise line/block summary.
@@ -143,22 +144,22 @@ completion_include_position
 ==============================================================================
 5. Behavior                                              *lector-behavior*
 
-Motion semantics are derived from Neovim events and the post-mapping input
-stream. Character motions read characters, word motions read words or WORDs,
-and vertical motions read structured lines. Opaque mappings and programmatic
-cursor changes safely use a geometric fallback.
+Cursor semantics are derived from Neovim events and before-and-after editor
+geometry. Mappings, Lua callbacks, and programmatic cursor changes use the
+same path. Provider-declared navigation can additionally report that no
+previous or next item exists; see |lector-provider-navigation|.
 
 Operator edit destinations use |TextYankPost|, including its Visual and
-register-type metadata. Semantic input tracking uses the mapping-expanded
-command input supplied by |vim.on_key()|, not the physical key. Put
-announcements use |TextPutPost| when available and a change-verified keyboard
-fallback otherwise. Fold, search,
-quickfix, recording, spelling, diagnostic, command-line, message, and window
-state come from documented Neovim APIs and events.
+register-type metadata. Put announcements use |TextPutPost| when available and
+a change-verified edit fallback otherwise. |vim.on_key()| captures only the
+state before an input is processed; literal normal-mode keys and mapping
+expansions have no semantic meaning to lector.nvim. Fold, search, quickfix,
+recording, spelling, diagnostic, command-line, message, and window state come
+from documented Neovim APIs and events.
 
 When a window or native context menu closes without causing another
-announcement, Lector says "closed". Closing a buffer instead announces the
-underlying buffer name.
+announcement, lector.nvim requests speech saying "closed". Closing a buffer
+instead announces the underlying buffer name.
 
 Actions which may display output send protocol end before Neovim processes the
 action. Visible output is left to ordinary terminal reading and is not
@@ -174,7 +175,33 @@ buffer entry. The terminal consumer remains responsible for reset,
 alternate-screen, PTY, and pane-local failsafes.
 
 ==============================================================================
-6. Completion API                                 *lector-completion-api*
+6. Provider APIs                                    *lector-provider-api*
+
+                                                   *lector-provider-navigation*
+Navigation providers can declare direction without exposing their mappings or
+text-object names: >lua
+
+    require("lector").observe_navigation("next", function()
+      provider.goto_next_item()
+    end)
+<
+Use "previous" or "next". lector.nvim preserves the callback's return values
+and errors. If it produces no cursor, buffer, text, or semantic speech change,
+lector.nvim announces "no previous item" or "no next item" after Neovim has
+finished processing related events.
+
+                                                       *lector-provider-search*
+Providers that repeat a search can similarly expose the operation rather than
+its mapping: >lua
+
+    require("lector").observe_search(function()
+      provider.goto_next_match()
+    end)
+<
+Successful searches use Neovim's search state for position and wrap
+announcements.
+
+                                                      *lector-completion-api*
 
 Plugins may publish provider-neutral menu state: >lua
 

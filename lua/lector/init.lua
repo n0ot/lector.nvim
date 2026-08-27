@@ -1,6 +1,11 @@
 -- SPDX-License-Identifier: MIT
 
 local M = {}
+local unpack_values = unpack or table.unpack
+
+local function pack_values(...)
+  return { n = select("#", ...), ... }
+end
 
 local protocol_prefix = "Lector;A11y;1;"
 local maximum_speech_bytes = 2000
@@ -27,13 +32,9 @@ local state = {
   command_lines = {},
   command_line_active = false,
   command_line_level = 0,
-  pending_command_navigation = nil,
-  pending_cursor_motion = nil,
-  cursor_motion_prefix = nil,
-  pending_value_change = nil,
-  pending_text_change = nil,
-  pending_put = nil,
-  put_prefix = nil,
+  pending_navigation = nil,
+  pending_input = nil,
+  pending_structured_edit = nil,
   structured_edit_ticks = {},
   edit_destination_ticks = {},
   put_announcement_ticks = {},
@@ -58,12 +59,14 @@ local state = {
   recent_list_destination = nil,
   search_announcement_generation = 0,
   search_wrapped = false,
+  last_search_destination = nil,
   list_selections = {},
   fold_observation_generation = 0,
   input_namespace = nil,
   message_history = nil,
   message_poll_scheduled = false,
   buffer_announcement_generation = 0,
+  cursor_announcement_generation = 0,
   window_scan_generation = 0,
   speech_generation = 0,
   closed_announcement_generation = 0,
@@ -307,7 +310,7 @@ end
 ---
 --- This is intentionally provider-neutral. Optional Neovim-plugin adapters can
 --- report their resulting menu state without replacing mappings or transferring
---- ownership of the visible menu to Lector.
+--- ownership of the visible menu to lector.nvim.
 local function publish_menu(menu, announce)
   if not state.enabled or not announce or type(menu) ~= "table" then
     return false
@@ -450,73 +453,6 @@ local function character_distance(text, first_column, second_column)
     return distance
   end
   return last - first
-end
-
-local function fallback_motion_word(line, column, big_word)
-  if not big_word then
-    return select(1, word_at(line, column))
-  end
-  local search_from = 0
-  while search_from <= #line do
-    local match = vim.fn.matchstrpos(line, [[\S\+]], search_from)
-    local start_column = match[2]
-    local end_column = match[3]
-    if start_column < 0 or start_column > column then
-      return nil
-    end
-    if column < end_column then
-      return match[1]
-    end
-    search_from = end_column
-  end
-  return nil
-end
-
-local function motion_word_at(line, column, big_word)
-  if type(vim.fn.charclass) ~= "function" then
-    return fallback_motion_word(line, column, big_word)
-  end
-  local characters = {}
-  local byte_offset = 0
-  local current_index
-  for _, text in ipairs(vim.fn.split(line, "\\zs")) do
-    local character = {
-      text = text,
-      first_byte = byte_offset,
-      last_byte = byte_offset + #text,
-      class = vim.fn.charclass(text),
-    }
-    table.insert(characters, character)
-    if character.first_byte <= column and column < character.last_byte then
-      current_index = #characters
-    end
-    byte_offset = character.last_byte
-  end
-  if not current_index or characters[current_index].class == 0 then
-    return nil
-  end
-
-  local class = characters[current_index].class
-  local function belongs(character)
-    if big_word then
-      return character.class ~= 0
-    end
-    return character.class == class
-  end
-
-  local first = current_index
-  while first > 1 and belongs(characters[first - 1]) do
-    first = first - 1
-  end
-  local last = current_index
-  while last < #characters and belongs(characters[last + 1]) do
-    last = last + 1
-  end
-  local parts = {}
-  for index = first, last do
-    table.insert(parts, characters[index].text)
-  end
-  return table.concat(parts)
 end
 
 local function snapshot()
@@ -966,53 +902,52 @@ local function changedtick(buffer)
   return ok and tick or nil
 end
 
-local function refresh_failed_motion(motion)
-  if motion and state.pending_cursor_motion == motion then
-    motion.speech_generation = state.speech_generation
+local function refresh_failed_navigation(navigation)
+  if navigation and state.pending_navigation == navigation then
+    navigation.speech_generation = state.speech_generation
   end
 end
 
 local function announce_cursor(event)
   M.activate()
-  local motion = state.pending_cursor_motion
+  local navigation = state.pending_navigation
   local current = snapshot()
   if not current then
-    state.pending_cursor_motion = nil
+    state.pending_navigation = nil
     return
   end
-  local deferred_failed_motion
-  if motion
-    and motion.snapshot
-    and current.window == motion.snapshot.window
-    and current.buffer == motion.snapshot.buffer
-    and current.row == motion.snapshot.row
-    and current.column == motion.snapshot.column
-    and changedtick(current.buffer) == motion.changedtick
+  local deferred_navigation
+  if navigation
+    and navigation.snapshot
+    and current.window == navigation.snapshot.window
+    and current.buffer == navigation.snapshot.buffer
+    and current.row == navigation.snapshot.row
+    and current.column == navigation.snapshot.column
+    and changedtick(current.buffer) == navigation.changedtick
   then
-    -- CursorMoved may be coalesced across rapidly entered mappings. If the
-    -- newest bracket navigation did not move from its own snapshot, this
-    -- event belongs to an earlier motion. Preserve the failure observation
-    -- while the geometric fallback announces the cursor's actual arrival.
-    deferred_failed_motion = motion
-    motion = nil
+    -- CursorMoved may be coalesced across rapidly completed actions. If the
+    -- newest observed navigation did not move from its own snapshot, this
+    -- event belongs to an earlier action. Preserve the failure observation
+    -- while announcing the cursor's actual arrival geometrically.
+    deferred_navigation = navigation
   else
-    state.pending_cursor_motion = nil
+    state.pending_navigation = nil
   end
   if state.suppress_next_cursor then
     state.suppress_next_cursor = nil
     remember(current)
-    refresh_failed_motion(deferred_failed_motion)
+    refresh_failed_navigation(deferred_navigation)
     return
   end
   if state.suppress_edit_cursor then
     state.suppress_edit_cursor = false
     remember(current)
-    refresh_failed_motion(deferred_failed_motion)
+    refresh_failed_navigation(deferred_navigation)
     return
   end
   if menu_is_open() then
     remember(current)
-    refresh_failed_motion(deferred_failed_motion)
+    refresh_failed_navigation(deferred_navigation)
     return
   end
   local announced_list_destination = announce_selected_list_destination(current)
@@ -1024,27 +959,7 @@ local function announce_cursor(event)
     and previous
     and previous.buffer == current.buffer
   then
-    if motion and motion.kind == "character" then
-      if not new_spelling then
-        send_speech(character_at_cursor(current))
-      end
-    elseif motion and motion.kind == "word" then
-      if motion.spelling or not new_spelling then
-        local word = motion_word_at(current.line, current.column, false)
-        send_speech(word or character_at_cursor(current))
-      end
-    elseif motion and motion.kind == "WORD" then
-      if not new_spelling then
-        local word = motion_word_at(current.line, current.column, true)
-        send_speech(word or character_at_cursor(current))
-      end
-    elseif motion and motion.kind == "line" then
-      if not announce_list_window_entry(current) then
-        send_line(spoken_line(current), current.indentation)
-      end
-      announce_closed_fold(current)
-      announce_current_line_diagnostic(current)
-    elseif previous.row ~= current.row then
+    if previous.row ~= current.row then
       if not announce_list_window_entry(current) then
         send_line(spoken_line(current), current.indentation)
       end
@@ -1061,13 +976,26 @@ local function announce_cursor(event)
       end
     end
   end
-  if announced_list_destination or (motion and motion.spelling) then
+  if announced_list_destination then
     state.last_spelling = spelling and spelling.key or nil
   else
     announce_spelling(current, spelling)
   end
   remember(current)
-  refresh_failed_motion(deferred_failed_motion)
+  refresh_failed_navigation(deferred_navigation)
+end
+
+local function schedule_cursor_announcement(event)
+  state.cursor_announcement_generation = state.cursor_announcement_generation + 1
+  local generation = state.cursor_announcement_generation
+  local lifecycle_generation = state.lifecycle_generation
+  vim.schedule(function()
+    if lifecycle_is_current(lifecycle_generation)
+      and generation == state.cursor_announcement_generation
+    then
+      announce_cursor(event)
+    end
+  end)
 end
 
 local function spoken_register_text(text)
@@ -1122,6 +1050,49 @@ local function mark_structured_edit(buffer)
   end
 end
 
+local function input_before_change(buffer)
+  local input = state.pending_input
+  local previous = input and input.snapshot or nil
+  if previous and previous.buffer == buffer then
+    return previous, input
+  end
+  local window = vim.api.nvim_get_current_win()
+  previous = state.text_windows[window]
+  if previous and previous.buffer == buffer then
+    return previous, nil
+  end
+  return nil, input
+end
+
+local function edit_destination_from_effect(data, previous, current)
+  local regtype = tostring(data and data.regtype or ""):sub(1, 1)
+  if regtype == "V" or regtype == "\22" then
+    return "line"
+  end
+  if data and data.visual then
+    return "character"
+  end
+  if previous
+    and current
+    and previous.buffer == current.buffer
+    and (previous.row ~= current.row or previous.line_count ~= current.line_count)
+  then
+    return "line"
+  end
+  local contents = data and data.regcontents or {}
+  local deleted = type(contents) == "table" and table.concat(contents, "\n") or ""
+  if previous
+    and current
+    and previous.row == current.row
+    and previous.column == current.column
+    and current.word
+    and vim.fn.strchars(deleted, true) > 1
+  then
+    return "word"
+  end
+  return "character"
+end
+
 local function schedule_edit_destination(buffer, destination_kind, previous)
   if not state.options.announce_deletions then
     state.suppress_edit_cursor = false
@@ -1166,22 +1137,18 @@ local function announce_operator_edit(event)
     return
   end
   local buffer = event.buf or vim.api.nvim_get_current_buf()
-  local pending_change = state.pending_text_change
-  local previous = pending_change and pending_change.snapshot or nil
+  local previous = input_before_change(buffer)
+  local current = snapshot()
+  state.suppress_edit_cursor = true
   mark_structured_edit(buffer)
-  state.pending_text_change = nil
-  if state.pending_put then
-    return
-  end
+  local pending = {
+    buffer = buffer,
+    destination_kind = edit_destination_from_effect(data, previous, current),
+    previous = previous,
+  }
+  state.pending_structured_edit = pending
   local regtype = tostring(data.regtype or ""):sub(1, 1)
-  local destination_kind = pending_change and pending_change.destination_kind or nil
-  if regtype == "V" or regtype == "\22" then
-    destination_kind = "line"
-  elseif data.visual then
-    -- TextYankPost identifies a Visual operator independently of the key or
-    -- mapping that invoked it. A characterwise Visual deletion lands on a
-    -- character even when its selected contents span multiple characters.
-    destination_kind = "character"
+  if regtype ~= "V" and regtype ~= "\22" and data.visual then
     if operator == "d" and state.options.announce_deletions then
       local suppression = {}
       state.suppress_visual_delete_mode_return = suppression
@@ -1192,15 +1159,19 @@ local function announce_operator_edit(event)
       end)
     end
   end
-  schedule_edit_destination(buffer, destination_kind or "character", previous)
-  local current = snapshot()
+  vim.schedule(function()
+    if state.pending_structured_edit == pending then
+      state.pending_structured_edit = nil
+      schedule_edit_destination(buffer, pending.destination_kind, previous)
+    end
+  end)
   remember_text(current)
 end
 
 local function announce_put(data, buffer)
   mark_structured_edit(buffer)
-  state.pending_put = nil
-  state.pending_text_change = nil
+  state.pending_structured_edit = nil
+  state.pending_input = nil
   local tick = changedtick(buffer)
   local already_announced = tick and state.put_announcement_ticks[buffer] == tick
   if tick then
@@ -1222,26 +1193,6 @@ local function announce_put_event(event)
     return
   end
   announce_put(data, event.buf or vim.api.nvim_get_current_buf())
-end
-
-local function finish_pending_put(pending, current)
-  if state.pending_put ~= pending then
-    return false
-  end
-  current = current or snapshot()
-  if not current or current.buffer ~= pending.buffer then
-    state.pending_put = nil
-    return false
-  end
-  local tick = changedtick(current.buffer)
-  if not tick or tick == pending.changedtick then
-    return false
-  end
-  announce_put({
-    regcontents = pending.regcontents,
-    regtype = pending.regtype,
-  }, current.buffer)
-  return true
 end
 
 local numeric_value_patterns = {
@@ -1289,59 +1240,175 @@ local function changed_value_at_cursor(current)
   return character_at_cursor(current)
 end
 
-local function announce_text_change()
+local function line_change(previous, current)
+  if not previous
+    or previous.buffer ~= current.buffer
+  then
+    return "unknown", "", ""
+  end
+  if previous.line_count < current.line_count then
+    return "insertion", "", current.line
+  end
+  if previous.line_count > current.line_count then
+    return "deletion", previous.line, ""
+  end
+  if previous.row ~= current.row then
+    return "unknown", "", ""
+  end
+  local old = previous.line
+  local new = current.line
+  local first = 0
+  local limit = math.min(#old, #new)
+  while first < limit and old:byte(first + 1) == new:byte(first + 1) do
+    first = first + 1
+  end
+  local suffix = 0
+  while suffix < #old - first
+    and suffix < #new - first
+    and old:byte(#old - suffix) == new:byte(#new - suffix)
+  do
+    suffix = suffix + 1
+  end
+  local removed = old:sub(first + 1, #old - suffix)
+  local added = new:sub(first + 1, #new - suffix)
+  if #removed > #added then
+    return "deletion", removed, added
+  end
+  if #added > #removed then
+    return "insertion", removed, added
+  end
+  if removed ~= added then
+    return "replacement", removed, added
+  end
+  return "unchanged", removed, added
+end
+
+local function history_replay(input)
+  if not input or type(input.undo) ~= "table" then
+    return false
+  end
+  local ok, current = pcall(vim.fn.undotree)
+  if not ok or type(current) ~= "table" then
+    return false
+  end
+  return current.seq_last == input.undo.seq_last
+    and current.seq_cur ~= input.undo.seq_cur
+end
+
+local function changed_region_matches_register(input)
+  local register = input and input.register or nil
+  if not register or type(register.regcontents) ~= "table" then
+    return false
+  end
+  local first = vim.fn.getpos("'[")
+  local last = vim.fn.getpos("']")
+  if type(first) ~= "table"
+    or type(last) ~= "table"
+    or tonumber(first[2]) == 0
+    or tonumber(last[2]) == 0
+  then
+    return false
+  end
+  local ok, region = pcall(vim.fn.getregion, first, last, {
+    type = register.regtype,
+  })
+  return ok and vim.deep_equal(region, register.regcontents)
+end
+
+local function unstructured_destination(previous, current, removed)
+  if previous
+    and (previous.row ~= current.row or previous.line_count ~= current.line_count)
+  then
+    return "line"
+  end
+  if previous
+    and previous.column == current.column
+    and current.word
+    and vim.fn.strchars(removed, true) > 1
+  then
+    return "word"
+  end
+  return "character"
+end
+
+local function suppress_related_cursor_event()
+  state.suppress_edit_cursor = true
+  vim.schedule(function()
+    vim.schedule(function()
+      if state.suppress_edit_cursor == true then
+        state.suppress_edit_cursor = false
+      end
+    end)
+  end)
+end
+
+local function announce_text_change(event)
   M.activate()
-  local value_change = state.pending_value_change
-  state.pending_value_change = nil
-  local pending_change = state.pending_text_change
-  state.pending_text_change = nil
   local current = snapshot()
   if not current then
     return
   end
-  if state.pending_put and finish_pending_put(state.pending_put, current) then
-    return
-  end
+  local previous, input = input_before_change(current.buffer)
+  local effect, removed = line_change(previous, current)
   local current_tick = changedtick(current.buffer)
   local structured = current_tick
     and state.structured_edit_ticks[current.buffer] == current_tick
   if structured then
     state.structured_edit_ticks[current.buffer] = nil
   end
-  if menu_is_open() and not (pending_change and pending_change.direct_deletion) then
+  if menu_is_open() and effect ~= "deletion" then
+    suppress_related_cursor_event()
     remember(current)
     remember_text(current)
+    if state.pending_input == input then
+      state.pending_input = nil
+    end
     return
   end
-  local previous = state.text_windows[current.window]
-  local pending = pending_change and pending_change.snapshot
-  if (not previous or previous.buffer ~= current.buffer or previous.row ~= current.row)
-    and pending
-    and pending.window == current.window
-    and pending.buffer == current.buffer
-    and pending.row == current.row
-  then
-    previous = pending
-  end
-  if value_change then
-    state.suppress_edit_cursor = false
-    if state.options.announce_value_changes then
-      send_speech(changed_value_at_cursor(current))
+  local is_put = event
+    and event.event == "TextChanged"
+    and not history_replay(input)
+    and effect ~= "deletion"
+    and changed_region_matches_register(input)
+  if is_put then
+    if state.pending_input == input then
+      state.pending_input = nil
     end
-  elseif not structured
-    and pending_change
-    and (pending_change.direct_deletion or pending_change.operator_candidate)
-  then
+    announce_put(input.register, current.buffer)
+    return
+  end
+  if structured then
+    suppress_related_cursor_event()
+  elseif history_replay(input) then
+    state.pending_structured_edit = nil
+    suppress_related_cursor_event()
+  elseif effect == "deletion" and state.options.announce_deletions then
+    suppress_related_cursor_event()
     schedule_edit_destination(
       current.buffer,
-      pending_change.destination_kind or "character",
-      pending or previous
+      unstructured_destination(previous, current, removed),
+      previous
     )
-  elseif not structured then
-    state.suppress_edit_cursor = false
+  elseif event
+    and event.event == "TextChanged"
+    and previous
+    and previous.row == current.row
+    and state.options.announce_value_changes
+  then
+    local before = numeric_value_at_or_after(previous.line, previous.column)
+    local after = numeric_value_at_or_after(current.line, current.column)
+    if before and after and before ~= after then
+      send_speech(changed_value_at_cursor(current))
+    end
+    suppress_related_cursor_event()
+  else
+    suppress_related_cursor_event()
   end
   remember(current)
   remember_text(current)
+  if state.pending_input == input then
+    state.pending_input = nil
+  end
 end
 
 local mode_names = {
@@ -1406,9 +1473,11 @@ local function announce_mode(event)
     local suppression = {}
     state.suppress_next_cursor = suppression
     vim.schedule(function()
-      if state.suppress_next_cursor == suppression then
-        state.suppress_next_cursor = nil
-      end
+      vim.schedule(function()
+        if state.suppress_next_cursor == suppression then
+          state.suppress_next_cursor = nil
+        end
+      end)
     end)
     announce_pending_insert_diagnostics()
   end
@@ -1416,7 +1485,7 @@ end
 
 local function announce_buffer()
   M.activate()
-  state.pending_cursor_motion = nil
+  state.pending_navigation = nil
   close_all_menus()
   local current = snapshot()
   if not current then
@@ -1448,6 +1517,7 @@ end
 
 local function schedule_buffer_announcement()
   state.buffer_announcement_generation = state.buffer_announcement_generation + 1
+  state.cursor_announcement_generation = state.cursor_announcement_generation + 1
   local generation = state.buffer_announcement_generation
   M.activate()
   vim.schedule(function()
@@ -1521,15 +1591,6 @@ local function announce_command_line_position(level, position)
   end
 end
 
-local vertical_command_navigation = {
-  ["<Up>"] = true,
-  ["<Down>"] = true,
-  ["<C-P>"] = true,
-  ["<C-N>"] = true,
-  ["<PageUp>"] = true,
-  ["<PageDown>"] = true,
-}
-
 local function current_command_line(level)
   local ok_text, text = pcall(vim.fn.getcmdline)
   local ok_position, position = pcall(vim.fn.getcmdpos)
@@ -1573,7 +1634,25 @@ local function announce_command_line(event)
   send_speech(names[vim.fn.getcmdtype()] or "command")
 end
 
-local function announce_current_command_line(navigation, level)
+local function command_line_replaced(previous, current)
+  local first = 0
+  local limit = math.min(#previous, #current)
+  while first < limit and previous:byte(first + 1) == current:byte(first + 1) do
+    first = first + 1
+  end
+  local suffix = 0
+  while suffix < #previous - first
+    and suffix < #current - first
+    and previous:byte(#previous - suffix) == current:byte(#current - suffix)
+  do
+    suffix = suffix + 1
+  end
+  return (#previous - first - suffix) > 1
+    or (#current - first - suffix) > 1
+end
+
+local function announce_current_command_line(level)
+  level = tonumber(level) or state.command_line_level
   if not state.command_line_active or state.command_line_level ~= level then
     return
   end
@@ -1586,12 +1665,16 @@ local function announce_current_command_line(navigation, level)
     return
   end
   local previous = state.command_lines[level]
+  if not state.options.announce_command_line then
+    state.command_lines[level] = current
+    return
+  end
   if previous and previous.text == current.text then
     announce_command_line_position(level, current.position)
     return
   end
   state.command_lines[level] = current
-  if previous and vertical_command_navigation[navigation] then
+  if previous and command_line_replaced(previous.text, current.text) then
     send_speech(current.text == "" and "blank" or current.text)
   end
 end
@@ -1861,41 +1944,7 @@ local function schedule_message_poll()
   end)
 end
 
-local direct_cursor_motions = {
-  h = "character",
-  l = "character",
-  ["|"] = "character",
-  [";"] = "character",
-  [","] = "character",
-  w = "word",
-  b = "word",
-  e = "word",
-  W = "WORD",
-  B = "WORD",
-  E = "WORD",
-  j = "line",
-  k = "line",
-  ["+"] = "line",
-  ["-"] = "line",
-  ["_"] = "line",
-  G = "line",
-}
-
-local g_cursor_motions = {
-  e = "word",
-  E = "WORD",
-  j = "line",
-  k = "line",
-  g = "line",
-  ["0"] = "character",
-  ["^"] = "character",
-  ["$"] = "character",
-  ["_"] = "character",
-  m = "character",
-  M = "character",
-}
-
-local function accepts_normal_motion()
+local function observes_editor_state()
   local mode = vim.api.nvim_get_mode().mode:sub(1, 1)
   return mode == "n"
     or mode == "o"
@@ -1907,179 +1956,124 @@ local function accepts_normal_motion()
     or mode == "\19"
 end
 
-local function bracket_motion_direction(prefix)
-  if prefix == "bracket-previous" then
-    return "previous"
-  end
-  if prefix == "bracket-next" then
-    return "next"
-  end
-  return nil
-end
-
-local function typed_bracket_motion_direction(typed_key)
-  if type(typed_key) ~= "string" or #typed_key < 2 then
-    return nil
-  end
-  local prefix = typed_key:sub(1, 1)
-  if prefix == "[" then
-    return "previous"
-  end
-  if prefix == "]" then
-    return "next"
-  end
-  return nil
-end
-
-local function schedule_failed_cursor_motion(motion)
+local function schedule_failed_navigation(navigation)
   local lifecycle_generation = state.lifecycle_generation
   vim.schedule(function()
     vim.schedule(function()
       if not lifecycle_is_current(lifecycle_generation) then
         return
       end
-      if state.pending_cursor_motion ~= motion then
+      if state.pending_navigation ~= navigation then
         return
       end
-      state.pending_cursor_motion = nil
+      state.pending_navigation = nil
       if not state.enabled
         or not state.options.announce_cursor
         or state.command_line_active
         or menu_is_open()
-        or motion.speech_generation ~= state.speech_generation
-        or not accepts_normal_motion()
+        or navigation.speech_generation ~= state.speech_generation
+        or not observes_editor_state()
       then
         return
       end
       local current = snapshot()
-      local previous = motion.snapshot
+      local previous = navigation.snapshot
       if not current
         or not previous
         or current.window ~= previous.window
         or current.buffer ~= previous.buffer
         or current.row ~= previous.row
         or current.column ~= previous.column
-        or changedtick(current.buffer) ~= motion.changedtick
+        or changedtick(current.buffer) ~= navigation.changedtick
       then
         return
       end
-      M.say("no " .. motion.direction .. " item")
+      M.say("no " .. navigation.direction .. " item")
     end)
   end)
 end
 
-local function record_cursor_motion(
-  key,
-  typed_key,
-  special_cursor_motions,
-  window_command_key
-)
-  state.pending_cursor_motion = nil
-  if state.command_line_active then
-    state.cursor_motion_prefix = nil
-    return
+--- Observe one provider-owned navigation action without depending on how it
+--- is mapped. The action's normal Neovim events announce successful movement;
+--- an unchanged editor state announces the unavailable direction.
+function M.observe_navigation(direction, action, ...)
+  if direction ~= "previous" and direction ~= "next" then
+    error("direction must be 'previous' or 'next'", 2)
+  end
+  if type(action) ~= "function" then
+    error("action must be a function", 2)
+  end
+  if not state.enabled or not state.options.announce_cursor then
+    return action(...)
   end
 
-  local full_mode = vim.api.nvim_get_mode().mode
-  local mode = full_mode:sub(1, 1)
-  if mode == "o" or full_mode:sub(1, 2) == "no" then
-    state.cursor_motion_prefix = nil
-    return
-  end
-  if mode == "i" or mode == "R" then
-    state.cursor_motion_prefix = nil
-    local kind = special_cursor_motions[key]
-    if kind then
-      state.pending_cursor_motion = { kind = kind }
-    end
-    return
-  end
-  if not accepts_normal_motion() then
-    state.cursor_motion_prefix = nil
-    return
-  end
+  local current = snapshot()
+  local navigation = current and {
+    direction = direction,
+    snapshot = current,
+    changedtick = changedtick(current.buffer),
+    speech_generation = state.speech_generation,
+  } or nil
+  state.pending_navigation = navigation
 
-  local prefix = state.cursor_motion_prefix
-  state.cursor_motion_prefix = nil
-  local kind
-  local spelling_motion = false
-  local direction
-  if prefix == "window" then
-    return
-  elseif bracket_motion_direction(prefix) then
-    direction = bracket_motion_direction(prefix)
-    if key ~= "p" and key ~= "P" then
-      kind = key == "s" and "word" or "line"
-      spelling_motion = key == "s"
+  local results = pack_values(pcall(action, ...))
+  if not results[1] then
+    if state.pending_navigation == navigation then
+      state.pending_navigation = nil
     end
-  elseif prefix == "g" then
-    kind = g_cursor_motions[key]
-  elseif prefix == "find" then
-    if key ~= "\27" then
-      kind = "character"
-    end
-  elseif key == window_command_key then
-    state.cursor_motion_prefix = "window"
-    return
-  elseif key == "[" then
-    state.cursor_motion_prefix = "bracket-previous"
-    return
-  elseif key == "]" then
-    state.cursor_motion_prefix = "bracket-next"
-    return
-  elseif key == "g" then
-    state.cursor_motion_prefix = "g"
-    return
-  elseif key == "f" or key == "F" or key == "t" or key == "T" then
-    state.cursor_motion_prefix = "find"
-    return
-  elseif key:match("^%d$") then
-    return
-  else
-    kind = direct_cursor_motions[key] or special_cursor_motions[key]
+    error(results[2], 0)
   end
-
-  if not kind then
-    -- Lua callback mappings are represented by an opaque resolved key. Their
-    -- complete typed bracket command still preserves the navigation family.
-    direction = typed_bracket_motion_direction(typed_key)
-    if direction then
-      kind = "line"
-    end
+  if navigation then
+    schedule_failed_navigation(navigation)
   end
-
-  if kind then
-    local motion = {
-      kind = kind,
-      spelling = spelling_motion,
-      direction = direction,
-    }
-    if direction then
-      motion.snapshot = snapshot()
-      motion.changedtick = motion.snapshot and changedtick(motion.snapshot.buffer) or nil
-      motion.speech_generation = state.speech_generation
-    end
-    state.pending_cursor_motion = motion
-    if motion.snapshot then
-      schedule_failed_cursor_motion(motion)
-    end
-  end
+  return unpack_values(results, 2, results.n)
 end
 
-local function record_value_change(key, value_change_keys)
-  state.pending_value_change = nil
-  if state.command_line_active or not accepts_normal_motion() then
-    return
+local function search_info(current, require_exact)
+  if not current then
+    return nil
   end
-  if value_change_keys[key] then
-    state.pending_value_change = true
+  local pattern = vim.fn.getreg("/")
+  if type(pattern) ~= "string" or pattern == "" then
+    return nil
   end
+  local ok, count = pcall(vim.fn.searchcount, {
+    recompute = 1,
+    maxcount = 100000,
+    timeout = 50,
+  })
+  if not ok or type(count) ~= "table" then
+    return nil
+  end
+  local index = tonumber(count.current) or 0
+  local total = tonumber(count.total) or 0
+  if index < 1
+    or total < 1
+    or (require_exact and tonumber(count.exact_match) ~= 1)
+  then
+    return nil
+  end
+  return {
+    count = count,
+    index = index,
+    total = total,
+    key = table.concat({ pattern, current.buffer, index, total }, "\0"),
+  }
 end
 
-local function schedule_search_announcement()
+local function schedule_search_destination(current, require_exact)
   if not state.enabled or not state.options.announce_search then
     state.search_wrapped = false
-    return
+    state.last_search_destination = nil
+    return false
+  end
+  require_exact = require_exact ~= false
+  local initial = search_info(current, require_exact)
+  if not initial then
+    if require_exact then
+      state.last_search_destination = nil
+    end
+    return false
   end
   state.search_announcement_generation = state.search_announcement_generation + 1
   local generation = state.search_announcement_generation
@@ -2089,22 +2083,17 @@ local function schedule_search_announcement()
     end
     local wrapped = state.search_wrapped
     state.search_wrapped = false
-    local ok, count = pcall(vim.fn.searchcount, {
-      recompute = 1,
-      maxcount = 100000,
-      timeout = 50,
-    })
-    if not ok or type(count) ~= "table" then
+    local latest = search_info(snapshot(), require_exact)
+    if not latest then
       return
     end
-    local current = tonumber(count.current) or 0
-    local total = tonumber(count.total) or 0
-    if current < 1 or total < 1 then
+    if latest.key == state.last_search_destination and not wrapped then
       return
     end
+    state.last_search_destination = latest.key
     M.activate()
-    local announcement = current .. " of " .. total
-    if tonumber(count.incomplete) and tonumber(count.incomplete) ~= 0 then
+    local announcement = latest.index .. " of " .. latest.total
+    if tonumber(latest.count.incomplete) and tonumber(latest.count.incomplete) ~= 0 then
       announcement = announcement .. ", count incomplete"
     end
     if wrapped then
@@ -2112,6 +2101,44 @@ local function schedule_search_announcement()
     end
     send_speech(announcement)
   end)
+  return true
+end
+
+local function schedule_search_announcement()
+  local lifecycle_generation = state.lifecycle_generation
+  vim.schedule(function()
+    if lifecycle_is_current(lifecycle_generation) then
+      schedule_search_destination(snapshot(), false)
+    end
+  end)
+  return true
+end
+
+--- Observe an action which selects a search result without depending on how
+--- it is mapped. Cursor speech still comes from Neovim events; this adds the
+--- current and total match position after the action completes.
+function M.observe_search(action, ...)
+  if type(action) ~= "function" then
+    error("action must be a function", 2)
+  end
+  local suppression = {}
+  state.suppress_next_cursor = suppression
+  local results = pack_values(pcall(action, ...))
+  if not results[1] then
+    if state.suppress_next_cursor == suppression then
+      state.suppress_next_cursor = nil
+    end
+    error(results[2], 0)
+  end
+  schedule_search_announcement()
+  vim.schedule(function()
+    vim.schedule(function()
+      if state.suppress_next_cursor == suppression then
+        state.suppress_next_cursor = nil
+      end
+    end)
+  end)
+  return unpack_values(results, 2, results.n)
 end
 
 local function announce_search_wrapped()
@@ -2208,116 +2235,7 @@ local function open_popup_menu(event)
   end)
 end
 
-local word_edit_motion_keys = {
-  b = true,
-  B = true,
-  e = true,
-  E = true,
-  w = true,
-  W = true,
-}
-
-local line_edit_motion_keys = {
-  c = true,
-  d = true,
-  G = true,
-  j = true,
-  k = true,
-  ["+"] = true,
-  ["-"] = true,
-  ["_"] = true,
-  ["{"] = true,
-  ["}"] = true,
-}
-
-local function edit_destination_kind(
-  key,
-  direct_deletion_keys,
-  operator_edit_keys,
-  bracket_command
-)
-  local full_mode = vim.api.nvim_get_mode().mode
-  local mode = full_mode:sub(1, 1)
-  local operator_pending = mode == "o" or full_mode:sub(1, 2) == "no"
-  if bracket_command and key ~= "p" and key ~= "P" then
-    return nil
-  end
-  if direct_deletion_keys[key] then
-    return "character"
-  end
-  if operator_pending then
-    if word_edit_motion_keys[key] then
-      return "word"
-    end
-    if line_edit_motion_keys[key] then
-      return "line"
-    end
-    return "character"
-  end
-  if not operator_edit_keys[key] then
-    return nil
-  end
-  if mode == "V"
-    or mode == "S"
-    or mode == "\22"
-    or mode == "\19"
-    or key == "S"
-  then
-    return "line"
-  end
-  if mode == "v" or mode == "s" or key == "x" or key == "X" or key == "s"
-    or key == "D" or key == "C"
-  then
-    return "character"
-  end
-  return nil
-end
-
-local function record_text_change_baseline(
-  key,
-  direct_deletion_keys,
-  operator_edit_keys,
-  bracket_command
-)
-  local full_mode = vim.api.nvim_get_mode().mode
-  local operator_pending = full_mode:sub(1, 1) == "o"
-    or full_mode:sub(1, 2) == "no"
-  local pending = {
-    direct_deletion = direct_deletion_keys[key] == true,
-    operator_candidate = operator_pending or operator_edit_keys[key] == true,
-    destination_kind = edit_destination_kind(
-      key,
-      direct_deletion_keys,
-      operator_edit_keys,
-      bracket_command
-    ),
-    snapshot = snapshot(),
-  }
-  state.pending_text_change = pending
-  if pending.snapshot then
-    vim.schedule(function()
-      if state.pending_text_change == pending then
-        state.pending_text_change = nil
-      end
-    end)
-  end
-end
-
-local function record_pending_put(key, put_keys)
-  if state.command_line_active or not accepts_normal_motion() then
-    state.put_prefix = nil
-    return
-  end
-  local prefix = state.put_prefix
-  state.put_prefix = nil
-  if (key == "g" or key == "[" or key == "]") and not prefix then
-    state.put_prefix = key
-    return
-  end
-  if not put_keys[key] or (prefix and prefix ~= "g" and prefix ~= "[" and prefix ~= "]") then
-    return
-  end
-  local buffer = vim.api.nvim_get_current_buf()
+local function current_register()
   local register = vim.v.register
   if type(register) ~= "string" or register == "" then
     register = '"'
@@ -2325,43 +2243,46 @@ local function record_pending_put(key, put_keys)
   local ok_contents, contents = pcall(vim.fn.getreg, register, 1, true)
   local ok_type, regtype = pcall(vim.fn.getregtype, register)
   if not ok_contents or type(contents) ~= "table" or not ok_type then
-    return
+    return nil
   end
-  local pending = {
-    buffer = buffer,
-    changedtick = changedtick(buffer),
+  return {
     regcontents = contents,
     regtype = regtype,
   }
-  state.pending_put = pending
-  vim.schedule(function()
-    if state.pending_put == pending and not finish_pending_put(pending) then
-      state.pending_put = nil
-    end
-  end)
 end
 
-local function record_edit_cursor_suppression(
-  key,
-  direct_edit_keys,
-  escape,
-  bracket_command
-)
-  local full_mode = vim.api.nvim_get_mode().mode
-  local mode = full_mode:sub(1, 1)
-  local operator_pending = mode == "o" or full_mode:sub(1, 2) == "no"
-  if state.suppress_edit_cursor and not operator_pending then
-    state.suppress_edit_cursor = false
+local function observe_input_state()
+  if state.command_line_active then
+    state.pending_input = nil
+    return
   end
-  if key == escape then
-    state.suppress_edit_cursor = false
-  elseif operator_pending
-    or (accepts_normal_motion()
-      and direct_edit_keys[key]
-      and (not bracket_command or key == "p" or key == "P"))
-  then
-    state.suppress_edit_cursor = true
+  local current = snapshot()
+  if not current then
+    state.pending_input = nil
+    return
   end
+  local ok_undo, undo = pcall(vim.fn.undotree)
+  local input = {
+    snapshot = current,
+    changedtick = changedtick(current.buffer),
+    register = current_register(),
+    undo = ok_undo and undo or nil,
+  }
+  state.pending_input = input
+  vim.schedule(function()
+    if state.pending_input == input then
+      local tick = changedtick(current.buffer)
+      if tick and input.changedtick and tick ~= input.changedtick then
+        local mode = vim.api.nvim_get_mode().mode:sub(1, 1)
+        announce_text_change({
+          event = (mode == "i" or mode == "R") and "TextChangedI" or "TextChanged",
+        })
+      end
+      if state.pending_input == input then
+        state.pending_input = nil
+      end
+    end
+  end)
 end
 
 local function detach_input_listener()
@@ -2377,79 +2298,7 @@ local function attach_input_listener()
   end
   state.input_namespace = state.input_namespace
     or vim.api.nvim_create_namespace("lector")
-  local navigation_keys = {}
-  for _, name in ipairs({
-    "<Left>", "<Right>", "<Up>", "<Down>", "<Home>", "<End>",
-    "<C-B>", "<C-F>", "<C-P>", "<C-N>", "<PageUp>", "<PageDown>",
-  }) do
-    navigation_keys[vim.api.nvim_replace_termcodes(name, true, false, true)] = name
-  end
-  local special_cursor_motions = {}
-  for name, kind in pairs({
-    ["<Left>"] = "character",
-    ["<Right>"] = "character",
-    ["<Up>"] = "line",
-    ["<Down>"] = "line",
-    ["<S-Left>"] = "word",
-    ["<S-Right>"] = "word",
-    ["<C-Left>"] = "WORD",
-    ["<C-Right>"] = "WORD",
-    ["<C-B>"] = "line",
-    ["<C-D>"] = "line",
-    ["<C-F>"] = "line",
-    ["<C-U>"] = "line",
-    ["<C-Y>"] = "line",
-    ["<C-E>"] = "line",
-    ["<PageUp>"] = "line",
-    ["<PageDown>"] = "line",
-    ["<CR>"] = "line",
-  }) do
-    special_cursor_motions[vim.api.nvim_replace_termcodes(name, true, false, true)] = kind
-  end
-  local value_change_keys = {
-    [vim.api.nvim_replace_termcodes("<C-A>", true, false, true)] = true,
-    [vim.api.nvim_replace_termcodes("<C-X>", true, false, true)] = true,
-  }
-  local direct_deletion_keys = {
-    ["\b"] = true,
-    ["\127"] = true,
-    [vim.api.nvim_replace_termcodes("<BS>", true, false, true)] = true,
-    [vim.api.nvim_replace_termcodes("<Del>", true, false, true)] = true,
-  }
-  local direct_edit_keys = {
-    c = true,
-    C = true,
-    d = true,
-    D = true,
-    s = true,
-    S = true,
-    x = true,
-    X = true,
-    p = true,
-    P = true,
-  }
-  local operator_edit_keys = {
-    c = true,
-    C = true,
-    d = true,
-    D = true,
-    s = true,
-    S = true,
-    x = true,
-    X = true,
-  }
-  local put_keys = {
-    p = true,
-    P = true,
-  }
-  local search_keys = {
-    n = true,
-    N = true,
-    ["*"] = true,
-    ["#"] = true,
-  }
   local escape = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
-  local window_command = vim.api.nvim_replace_termcodes("<C-W>", true, false, true)
   local popup_enter_keys = {
     [vim.api.nvim_replace_termcodes("<CR>", true, false, true)] = true,
     [vim.api.nvim_replace_termcodes("<kEnter>", true, false, true)] = true,
@@ -2497,6 +2346,13 @@ local function attach_input_listener()
     if popup_enter_keys[key] and popup.index then
       local activation_path = popup.items[popup.index].activation_path
       if activation_path then
+        local suppression = {}
+        state.suppress_next_cursor = suppression
+        defer_tracked(function()
+          if state.suppress_next_cursor == suppression then
+            state.suppress_next_cursor = nil
+          end
+        end, 50)
         local ok, written = pcall(vim.api.nvim_input, escape)
         if ok and written == #escape then
           popup.activation_path = activation_path
@@ -2517,14 +2373,13 @@ local function attach_input_listener()
     end)
   end
 
-  local function restore_command_output_fallback(key)
+  local function restore_command_output_fallback()
     if not state.command_output_fallback then
       return false
     end
     local ok, current_mode = pcall(vim.api.nvim_get_mode)
     local mode = ok and current_mode and current_mode.mode or ""
     local closes_prompt = mode == "r" or mode == "r?"
-      or (mode == "rm" and (key == "q" or key == escape or key == "\3"))
     if closes_prompt then
       state.discard_pending_messages = true
       suppress_prompt_return()
@@ -2572,10 +2427,10 @@ local function attach_input_listener()
     M.deactivate()
   end
 
-  -- Prefer the mapping-expanded command input so mappings retain the behavior
-  -- of their actions. The typed key is used only when an opaque Lua callback
-  -- otherwise hides a conventional bracket-navigation action.
-  vim.on_key(function(resolved_key, typed_key)
+  -- Input is only a transaction boundary here. Editor semantics come from
+  -- Neovim state and events; literal keys are interpreted only while
+  -- lector.nvim owns a context menu.
+  vim.on_key(function(resolved_key)
     if not state.enabled then
       return
     end
@@ -2587,55 +2442,11 @@ local function attach_input_listener()
       end
       return
     end
-    local prompt_key = restore_command_output_fallback(resolved_key)
+    local prompt_key = restore_command_output_fallback()
     if not prompt_key then
       begin_input_output_fallback()
     end
-    local bracket_command = bracket_motion_direction(state.cursor_motion_prefix) ~= nil
-    record_edit_cursor_suppression(
-      resolved_key,
-      direct_edit_keys,
-      escape,
-      bracket_command
-    )
-    record_pending_put(resolved_key, put_keys)
-    record_text_change_baseline(
-      resolved_key,
-      direct_deletion_keys,
-      operator_edit_keys,
-      bracket_command
-    )
-    record_cursor_motion(
-      resolved_key,
-      typed_key,
-      special_cursor_motions,
-      window_command
-    )
-    record_value_change(resolved_key, value_change_keys)
-    if search_keys[resolved_key] and accepts_normal_motion() then
-      schedule_search_announcement()
-    end
-    if state.command_line_active then
-      local navigation = navigation_keys[resolved_key]
-      if navigation then
-        local pending = {
-          navigation = navigation,
-          level = state.command_line_level,
-          lifecycle_generation = state.lifecycle_generation,
-        }
-        state.pending_command_navigation = pending
-        vim.schedule(function()
-          if state.pending_command_navigation == pending
-            and lifecycle_is_current(pending.lifecycle_generation)
-          then
-            announce_current_command_line(pending.navigation, pending.level)
-          end
-          if state.pending_command_navigation == pending then
-            state.pending_command_navigation = nil
-          end
-        end)
-      end
-    end
+    observe_input_state()
     schedule_message_poll()
     schedule_fold_observation()
     schedule_floating_window_scan()
@@ -2786,18 +2597,15 @@ local function invalidate_deferred_work()
   state.search_announcement_generation = state.search_announcement_generation + 1
   state.fold_observation_generation = state.fold_observation_generation + 1
   state.buffer_announcement_generation = state.buffer_announcement_generation + 1
+  state.cursor_announcement_generation = state.cursor_announcement_generation + 1
   state.window_scan_generation = state.window_scan_generation + 1
   state.closed_announcement_generation = state.closed_announcement_generation + 1
-  state.pending_command_navigation = nil
   state.command_lines = {}
   state.command_line_active = false
   state.command_line_level = 0
-  state.pending_cursor_motion = nil
-  state.cursor_motion_prefix = nil
-  state.pending_value_change = nil
-  state.pending_text_change = nil
-  state.pending_put = nil
-  state.put_prefix = nil
+  state.pending_navigation = nil
+  state.pending_input = nil
+  state.pending_structured_edit = nil
   state.pending_insert_diagnostics = {}
   state.suppress_next_cursor = nil
   state.suppress_edit_cursor = false
@@ -2805,6 +2613,7 @@ local function invalidate_deferred_work()
   state.suppress_prompt_mode_return = nil
   state.recent_list_destination = nil
   state.search_wrapped = false
+  state.last_search_destination = nil
   state.terminal_fallback = false
   state.terminal_command_line = false
   state.command_output_fallback = false
@@ -2838,13 +2647,9 @@ function M.setup(options)
   state.command_lines = {}
   state.command_line_active = false
   state.command_line_level = 0
-  state.pending_command_navigation = nil
-  state.pending_cursor_motion = nil
-  state.cursor_motion_prefix = nil
-  state.pending_value_change = nil
-  state.pending_text_change = nil
-  state.pending_put = nil
-  state.put_prefix = nil
+  state.pending_navigation = nil
+  state.pending_input = nil
+  state.pending_structured_edit = nil
   state.structured_edit_ticks = {}
   state.edit_destination_ticks = {}
   state.put_announcement_ticks = {}
@@ -2869,11 +2674,13 @@ function M.setup(options)
   state.recent_list_destination = nil
   state.search_announcement_generation = state.search_announcement_generation + 1
   state.search_wrapped = false
+  state.last_search_destination = nil
   state.list_selections = {}
   state.fold_observation_generation = state.fold_observation_generation + 1
   state.message_poll_scheduled = false
   state.message_history = read_message_history()
   state.buffer_announcement_generation = state.buffer_announcement_generation + 1
+  state.cursor_announcement_generation = state.cursor_announcement_generation + 1
   state.closed_announcement_generation = state.closed_announcement_generation + 1
 
   vim.api.nvim_create_augroup(group_name, { clear = true })
@@ -2897,10 +2704,10 @@ function M.setup(options)
     schedule_closed_announcement()
   end)
   create_autocmd({ "CursorMoved", "CursorMovedI" }, function(event)
-    announce_cursor(event.event)
+    schedule_cursor_announcement(event.event)
   end)
-  create_autocmd({ "TextChanged", "TextChangedI", "TextChangedP" }, function()
-    announce_text_change()
+  create_autocmd({ "TextChanged", "TextChangedI", "TextChangedP" }, function(event)
+    announce_text_change(event)
     schedule_blink_completion_refresh()
   end)
   create_autocmd("CompleteChanged", refresh_native_completion)
@@ -2942,10 +2749,13 @@ function M.setup(options)
   create_autocmd("CmdlineChanged", function()
     M.activate()
     refresh_command_line_completion()
-    if not state.pending_command_navigation then
-      remember_command_line(state.command_line_level)
-    end
+    announce_current_command_line(state.command_line_level)
   end)
+  if autocmd_supported("CursorMovedC") then
+    create_autocmd("CursorMovedC", function()
+      announce_current_command_line(state.command_line_level)
+    end)
+  end
   create_autocmd("CmdlineLeave", function(event)
     local event_level = event and event.data and event.data.cmdlevel
     local level = tonumber(event_level) or state.command_line_level
@@ -2960,7 +2770,6 @@ function M.setup(options)
     state.command_lines[level] = nil
     state.command_line_level = math.max(0, level - 1)
     state.command_line_active = state.command_line_level > 0
-    state.pending_command_navigation = nil
     M.close_menu(command_line_completion_menu_id)
     local restore_terminal_fallback = state.terminal_command_line
       and not state.command_line_active
@@ -2981,6 +2790,15 @@ function M.setup(options)
     end
     schedule_message_poll()
     if search_executed then
+      local suppression = {}
+      state.suppress_next_cursor = suppression
+      vim.schedule(function()
+        vim.schedule(function()
+          if state.suppress_next_cursor == suppression then
+            state.suppress_next_cursor = nil
+          end
+        end)
+      end)
       schedule_search_announcement()
     end
     if state.command_line_active then
