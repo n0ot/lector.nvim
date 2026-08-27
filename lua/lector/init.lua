@@ -51,7 +51,6 @@ local state = {
   terminal_fallback = false,
   terminal_command_line = false,
   command_output_fallback = false,
-  pending_input_output_restore = nil,
   discard_pending_messages = false,
   suppress_prompt_mode_return = nil,
   last_spelling = nil,
@@ -126,7 +125,6 @@ function M.activate()
   if not state.enabled then
     return false
   end
-  state.pending_input_output_restore = nil
   state.command_output_fallback = false
   local ok, buftype = pcall(vim.api.nvim_get_option_value, "buftype", {
     buf = vim.api.nvim_get_current_buf(),
@@ -1147,17 +1145,20 @@ local function attach_input_listener()
   end
 
   local function restore_command_output_fallback()
-    if not state.command_output_fallback then
-      return false
-    end
+    local fallback_active = state.command_output_fallback
     local ok, current_mode = pcall(vim.api.nvim_get_mode)
     local mode = ok and current_mode and current_mode.mode or ""
     local closes_prompt = mode == "r" or mode == "r?"
     if closes_prompt then
-      state.discard_pending_messages = true
+      if fallback_active then
+        state.discard_pending_messages = true
+      end
       suppress_prompt_return()
       M.activate()
       return true
+    end
+    if not fallback_active then
+      return false
     end
     if mode:sub(1, 1) ~= "r" and mode:sub(1, 1) ~= "!" then
       return false
@@ -1181,52 +1182,6 @@ local function attach_input_listener()
     return true
   end
 
-  local function begin_input_output_fallback()
-    if not state.options.announce_messages
-      or not state.active
-      or state.command_line_active
-      or state.terminal_fallback
-      or menu_is_open()
-    then
-      return
-    end
-    local ok, current_mode = pcall(vim.api.nvim_get_mode)
-    local mode = ok and current_mode and current_mode.mode or ""
-    local kind = mode:sub(1, 1)
-    if kind == "i" or kind == "R" or kind == "r" or kind == "!" or kind == "c" then
-      return
-    end
-    local restore = {}
-    state.pending_input_output_restore = restore
-    state.command_output_fallback = true
-    M.deactivate()
-    vim.schedule(function()
-      if state.pending_input_output_restore ~= restore then
-        return
-      end
-      state.pending_input_output_restore = nil
-      if not state.enabled
-        or not state.command_output_fallback
-        or state.command_line_active
-        or state.terminal_fallback
-      then
-        return
-      end
-      local mode_ok, next_mode = pcall(vim.api.nvim_get_mode)
-      local mode = mode_ok and type(next_mode) == "table" and next_mode or {}
-      local name = mode.mode or ""
-      local kind = name:sub(1, 1)
-      if not mode.blocking
-        and kind ~= "r"
-        and kind ~= "!"
-        and kind ~= "c"
-        and kind ~= "t"
-      then
-        M.activate()
-      end
-    end)
-  end
-
   -- Input is only a transaction boundary here. Editor semantics come from
   -- Neovim state and events; literal keys are interpreted only while
   -- lector.nvim owns a context menu.
@@ -1242,10 +1197,7 @@ local function attach_input_listener()
       end
       return
     end
-    local prompt_key = restore_command_output_fallback()
-    if not prompt_key then
-      begin_input_output_fallback()
-    end
+    restore_command_output_fallback()
     edits:observe_input_state()
     schedule_message_poll()
     schedule_fold_observation()
@@ -1411,7 +1363,6 @@ local function invalidate_deferred_work()
   state.terminal_fallback = false
   state.terminal_command_line = false
   state.command_output_fallback = false
-  state.pending_input_output_restore = nil
   state.discard_pending_messages = false
   state.message_poll_scheduled = false
 end
@@ -1452,7 +1403,6 @@ function M.setup(options)
   state.terminal_fallback = false
   state.terminal_command_line = false
   state.command_output_fallback = false
-  state.pending_input_output_restore = nil
   state.discard_pending_messages = false
   state.suppress_prompt_mode_return = nil
   state.last_spelling = nil

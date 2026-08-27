@@ -113,9 +113,9 @@ end
 input_listener("opaque input")
 vim.wait(20)
 equal(
-  { "end", "set;auto=0;cursor=0" },
+  {},
   protocol_commands(),
-  "a harmless normal-mode input restores semantic policy without inspecting its key"
+  "ordinary normal-mode input keeps cursor suppression active"
 )
 vim.api.nvim_get_mode = original_get_mode
 
@@ -222,11 +222,15 @@ vim.api.nvim_exec_autocmds("ModeChanged", {
 })
 vim.wait(20)
 equal(
-  { "end", "set;auto=0;cursor=0" },
+  { "say;6c6563746f7220626c6f636b696e67206f75747075742066616c6c6261636b2074657374" },
   protocol_commands(),
-  "dismissing unexpected blocking output is silent and discards its recorded duplicate"
+  "unexpected blocking output is reported semantically without enabling cursor tracking"
 )
-equal({}, speech(), "a hit-enter dismissal does not announce normal mode")
+equal(
+  { "lector blocking output fallback test" },
+  speech(),
+  "a hit-enter dismissal does not compete with the exact message"
+)
 
 vim.api.nvim_get_mode = original_get_mode
 clear()

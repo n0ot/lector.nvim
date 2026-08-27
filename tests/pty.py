@@ -144,11 +144,10 @@ def main() -> int:
             session.send(b":lua vim.keymap.set('n','Q',function() end)\r")
             session.clear()
             session.send(b"Q")
-            session.wait_for_event("set;auto=0;cursor=0")
             session.pump(0.2)
-            if session.events != ["end", "set;auto=0;cursor=0"]:
+            if session.events:
                 raise AssertionError(
-                    f"harmless input did not restore semantic policy: {session.events!r}"
+                    f"harmless input changed semantic policy: {session.events!r}"
                 )
             session.send(b":nunmap Q\r")
 
@@ -160,6 +159,27 @@ def main() -> int:
             session.send(b"Q")
             session.wait_for_event("no next item")
             session.send(b":nunmap Q\r")
+
+            session.send(b"atest\x1b")
+            session.pump(0.2)
+            session.clear()
+            session.send(b"0")
+            session.wait_for_event("t")
+            session.pump(0.2)
+            if session.events != ["t"]:
+                raise AssertionError(
+                    f"line-start motion competed with cursor tracking: {session.events!r}"
+                )
+            session.clear()
+            session.send(b"l")
+            session.wait_for_event("e")
+            session.pump(0.2)
+            if session.events != ["e"]:
+                raise AssertionError(
+                    f"character motion competed with cursor tracking: {session.events!r}"
+                )
+            session.send(b"dd")
+            session.pump(0.2)
 
             session.clear()
             session.send(b"ione\rone\rone\x1b")
