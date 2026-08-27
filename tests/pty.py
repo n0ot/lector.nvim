@@ -141,6 +141,17 @@ def main() -> int:
         try:
             session.wait_for_event("unnamed buffer")
 
+            session.send(b":lua vim.keymap.set('n','Q',function() end)\r")
+            session.clear()
+            session.send(b"Q")
+            session.wait_for_event("set;auto=0;cursor=0")
+            session.pump(0.2)
+            if session.events != ["end", "set;auto=0;cursor=0"]:
+                raise AssertionError(
+                    f"harmless input did not restore semantic policy: {session.events!r}"
+                )
+            session.send(b":nunmap Q\r")
+
             session.send(
                 b":lua vim.keymap.set('n','Q',function() "
                 b"require('lector').observe_navigation('next',function() end) end)\r"

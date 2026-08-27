@@ -107,6 +107,19 @@ equal({}, protocol_commands(), "ordinary Insert input keeps semantic policy stab
 vim.api.nvim_get_mode = original_get_mode
 
 clear()
+vim.api.nvim_get_mode = function()
+  return { mode = "n", blocking = false }
+end
+input_listener("opaque input")
+vim.wait(20)
+equal(
+  { "end", "set;auto=0;cursor=0" },
+  protocol_commands(),
+  "a harmless normal-mode input restores semantic policy without inspecting its key"
+)
+vim.api.nvim_get_mode = original_get_mode
+
+clear()
 enter_command_line()
 clear()
 leave_command_line(false)
