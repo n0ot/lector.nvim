@@ -95,12 +95,21 @@ function Edits:reset()
   self.suppress_visual_delete_mode_return = nil
 end
 
-function Edits:consume_cursor_suppression()
-  if not self.suppress_edit_cursor then
+function Edits:consume_cursor_suppression(current)
+  local suppression = self.suppress_edit_cursor
+  if not suppression then
     return false
   end
   self.suppress_edit_cursor = false
-  return true
+  if type(suppression) ~= "table" then
+    return true
+  end
+  return current
+    and suppression.window == current.window
+    and suppression.buffer == current.buffer
+    and suppression.row == current.row
+    and suppression.column == current.column
+    and suppression.changedtick == current.changedtick
 end
 
 function Edits:consume_visual_mode_return(left_visual, mode_kind)
@@ -295,11 +304,18 @@ function Edits:unstructured_destination(previous, current, removed)
   return "character"
 end
 
-function Edits:suppress_related_cursor_event()
-  self.suppress_edit_cursor = true
+function Edits:suppress_related_cursor_event(current)
+  local suppression = {
+    window = current.window,
+    buffer = current.buffer,
+    row = current.row,
+    column = current.column,
+    changedtick = current.changedtick,
+  }
+  self.suppress_edit_cursor = suppression
   vim.schedule(function()
     vim.schedule(function()
-      if self.suppress_edit_cursor == true then
+      if self.suppress_edit_cursor == suppression then
         self.suppress_edit_cursor = false
       end
     end)
@@ -321,7 +337,7 @@ function Edits:announce_text_change(event)
     self.structured_edit_ticks[current.buffer] = nil
   end
   if self.menu_is_open() and effect ~= "deletion" then
-    self:suppress_related_cursor_event()
+    self:suppress_related_cursor_event(current)
     self.remember(current)
     self.remember_text(current)
     if self.pending_input == input then
@@ -342,12 +358,12 @@ function Edits:announce_text_change(event)
     return
   end
   if structured then
-    self:suppress_related_cursor_event()
+    self:suppress_related_cursor_event(current)
   elseif self:history_replay(input) then
     self.pending_structured_edit = nil
-    self:suppress_related_cursor_event()
+    self:suppress_related_cursor_event(current)
   elseif effect == "deletion" and self.options().announce_deletions then
-    self:suppress_related_cursor_event()
+    self:suppress_related_cursor_event(current)
     local insert_deletion = event
       and event.event == "TextChangedI"
       and previous
@@ -374,9 +390,9 @@ function Edits:announce_text_change(event)
     if before and after and before ~= after then
       self.send_speech(self:changed_value_at_cursor(current))
     end
-    self:suppress_related_cursor_event()
+    self:suppress_related_cursor_event(current)
   else
-    self:suppress_related_cursor_event()
+    self:suppress_related_cursor_event(current)
   end
   self.remember(current)
   self.remember_text(current)

@@ -660,7 +660,7 @@ local function announce_cursor(event)
     providers:refresh_navigation(deferred_navigation)
     return
   end
-  if edits:consume_cursor_suppression() then
+  if edits:consume_cursor_suppression(current) then
     remember(current)
     providers:refresh_navigation(deferred_navigation)
     return
@@ -674,10 +674,15 @@ local function announce_cursor(event)
   local spelling = spell_error_at_cursor(current)
   local new_spelling = spelling and state.last_spelling ~= spelling.key
   local previous = state.windows[current.window]
+  local unchanged_buffer = previous
+    and (previous.changedtick == nil
+      or current.changedtick == nil
+      or previous.changedtick == current.changedtick)
   if not announced_list_destination
     and state.options.announce_cursor
     and previous
     and previous.buffer == current.buffer
+    and unchanged_buffer
   then
     if previous.row ~= current.row then
       if not announce_list_window_entry(current) then
@@ -685,7 +690,7 @@ local function announce_cursor(event)
       end
       announce_closed_fold(current)
       announce_current_line_diagnostic(current)
-    elseif event == "CursorMoved" and previous.column ~= current.column then
+    elseif previous.column ~= current.column then
       if not new_spelling then
         local distance = character_distance(current.line, current.column, previous.column)
         if distance > 1 and current.word and current.word_start ~= previous.word_start then

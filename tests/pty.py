@@ -190,8 +190,31 @@ def main() -> int:
                 )
             session.send(b"\x1b")
 
-            session.send(b"atest")
+            session.send(b"a")
             session.pump(0.2)
+            session.clear()
+            session.send(b"test")
+            session.pump(0.2)
+            if session.events:
+                raise AssertionError(
+                    f"Insert-mode typing produced semantic speech: {session.events!r}"
+                )
+            session.clear()
+            session.send(b"\x1b[D")
+            session.wait_for_event("t")
+            session.pump(0.2)
+            if session.events != ["t"]:
+                raise AssertionError(
+                    f"Insert-mode Left did not announce the character: {session.events!r}"
+                )
+            session.clear()
+            session.send(b"\x1b[C")
+            session.wait_for_event("blank")
+            session.pump(0.2)
+            if session.events != ["blank"]:
+                raise AssertionError(
+                    f"Insert-mode Right did not announce the character: {session.events!r}"
+                )
             session.clear()
             session.send(b"\x7f")
             session.wait_for_event("t")
@@ -200,7 +223,27 @@ def main() -> int:
                 raise AssertionError(
                     f"Insert-mode deletion did not announce removed text: {session.events!r}"
                 )
-            session.send(b"t\x1b")
+            session.send(b"t\rsecond")
+            session.pump(0.2)
+            session.clear()
+            session.send(b"\x1b[A")
+            session.wait_for_event("test")
+            session.pump(0.2)
+            if session.events != ["test"]:
+                raise AssertionError(
+                    f"Insert-mode Up did not announce the line: {session.events!r}"
+                )
+            session.clear()
+            session.send(b"\x1b[B")
+            session.wait_for_event("second")
+            session.pump(0.2)
+            if session.events != ["second"]:
+                raise AssertionError(
+                    f"Insert-mode Down did not announce the line: {session.events!r}"
+                )
+            session.send(b"\x1b")
+            session.pump(0.2)
+            session.send(b"dd")
             session.pump(0.2)
             session.clear()
             session.send(b"0")

@@ -69,6 +69,7 @@ function M.snapshot()
   local indentation = vim.fn.indent(cursor[1])
   local fold_start = vim.fn.foldclosed(cursor[1])
   local fold_end = fold_start >= 0 and vim.fn.foldclosedend(cursor[1]) or -1
+  local ok_tick, changedtick = pcall(vim.api.nvim_buf_get_changedtick, buffer)
   return {
     window = window,
     buffer = buffer,
@@ -81,6 +82,7 @@ function M.snapshot()
     fold_start = fold_start,
     fold_end = fold_end,
     line_count = vim.api.nvim_buf_line_count(buffer),
+    changedtick = ok_tick and changedtick or nil,
   }
 end
 
