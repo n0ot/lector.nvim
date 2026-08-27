@@ -6,6 +6,7 @@ vim.opt.runtimepath:prepend(root)
 
 local original_ui_send = vim.api.nvim_ui_send
 local original_defer_fn = vim.defer_fn
+local original_ui_select = vim.ui.select
 local sent = {}
 vim.api.nvim_ui_send = function(value)
   table.insert(sent, value)
@@ -14,6 +15,7 @@ end
 local function restore()
   vim.api.nvim_ui_send = original_ui_send
   vim.defer_fn = original_defer_fn
+  vim.ui.select = original_ui_select
 end
 
 local function fail(message)
@@ -71,6 +73,7 @@ local commands = {
   "LectorAccessibilityEnable",
   "LectorAccessibilityDisable",
   "LectorCompletionDocumentation",
+  "LectorDiagnostic",
   "LectorStatus",
 }
 
@@ -99,6 +102,8 @@ local first_options = vim.tbl_extend("force", {}, options, {
   announce_completions = true,
 })
 assert(first.setup(first_options))
+local first_ui_select = vim.ui.select
+assert(first_ui_select ~= original_ui_select, "setup did not install the selector handoff")
 vim.api.nvim_exec_autocmds("User", {
   pattern = "BlinkCmpMenuOpen",
   modeline = false,
@@ -109,6 +114,7 @@ package.loaded["lector"] = nil
 local second = require("lector")
 assert(first ~= second, "module reload returned the original instance")
 assert(second.setup(options))
+assert(vim.ui.select ~= first_ui_select, "module reload retained the stale selector wrapper")
 assert(not first.health_info().enabled, "the replaced module instance remained enabled")
 for _, timer in ipairs(timers) do
   assert(timer.stopped and timer.closed, "module reload did not cancel a deferred timer")
@@ -177,8 +183,17 @@ assert(not second.health_info().enabled, "the disable command did not target the
 vim.cmd("LectorAccessibilityEnable")
 assert(second.health_info().enabled, "the enable command did not target the active instance")
 
+local replacement_ui_select = function() end
+vim.ui.select = replacement_ui_select
+vim.api.nvim_exec_autocmds("SafeState", { modeline = false })
+assert(
+  vim.ui.select ~= replacement_ui_select,
+  "SafeState did not wrap a selector installed after setup"
+)
+
 clear()
 second.teardown()
+equal(replacement_ui_select, vim.ui.select, "teardown restores the latest selector provider")
 vim.wait(20)
 equal({}, speech(), "teardown cancels pending deferred announcements")
 equal(

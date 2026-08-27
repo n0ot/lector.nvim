@@ -1,6 +1,7 @@
 -- SPDX-License-Identifier: MIT
 
 local M = {}
+local unpack_values = unpack or table.unpack
 local completion_module = require("lector.completion")
 local context_menu_module = require("lector.context_menu")
 local edits_module = require("lector.edits")
@@ -34,8 +35,13 @@ local user_command_names = {
   "LectorAccessibilityEnable",
   "LectorAccessibilityDisable",
   "LectorCompletionDocumentation",
+  "LectorDiagnostic",
   "LectorStatus",
 }
+
+local function pack_values(...)
+  return { n = select("#", ...), ... }
+end
 
 local state = {
   enabled = false,
@@ -71,6 +77,9 @@ local state = {
   closed_announcement_generation = 0,
   lifecycle_generation = 0,
   deferred_timers = {},
+  ui_select_original = nil,
+  ui_select_wrapper = nil,
+  ui_select_transactions = {},
 }
 
 local defaults = {
@@ -125,7 +134,7 @@ local function send_line(text, indentation)
 end
 
 function M.activate()
-  if not state.enabled then
+  if not state.enabled or next(state.ui_select_transactions) ~= nil then
     return false
   end
   state.command_output_fallback = false
@@ -268,6 +277,71 @@ local function close_all_menus()
   menus:reset()
 end
 
+local function restore_ui_select()
+  if state.ui_select_wrapper
+    and vim.ui
+    and vim.ui.select == state.ui_select_wrapper
+  then
+    vim.ui.select = state.ui_select_original
+  end
+  state.ui_select_original = nil
+  state.ui_select_wrapper = nil
+end
+
+local function install_ui_select()
+  restore_ui_select()
+  if not vim.ui or type(vim.ui.select) ~= "function" then
+    return
+  end
+  local original = vim.ui.select
+  local wrapper
+  wrapper = function(items, options, on_choice)
+    if not state.enabled or type(on_choice) ~= "function" then
+      return original(items, options, on_choice)
+    end
+
+    local completed = false
+    local transaction = {}
+    state.ui_select_transactions[transaction] = true
+    close_all_menus()
+    M.deactivate()
+
+    local function finish(...)
+      if not completed then
+        completed = true
+        state.ui_select_transactions[transaction] = nil
+        if not next(state.ui_select_transactions) and state.enabled then
+          M.activate()
+        end
+      end
+      return on_choice(...)
+    end
+
+    local results = pack_values(pcall(original, items, options, finish))
+    if not results[1] then
+      if not completed then
+        completed = true
+        state.ui_select_transactions[transaction] = nil
+        if not next(state.ui_select_transactions) and state.enabled then
+          M.activate()
+        end
+      end
+      error(results[2], 0)
+    end
+    return unpack_values(results, 2, results.n)
+  end
+  state.ui_select_original = original
+  state.ui_select_wrapper = wrapper
+  vim.ui.select = wrapper
+end
+
+local function ensure_ui_select()
+  if state.ui_select_wrapper and vim.ui and vim.ui.select == state.ui_select_wrapper then
+    return
+  end
+  install_ui_select()
+end
+
 local function remember(current)
   if current then
     state.windows[current.window] = current
@@ -403,6 +477,10 @@ local function list_entry_announcement(info, index)
     return nil
   end
   local parts = {}
+  local title = normalize_speech(info.title)
+  if title then
+    table.insert(parts, title)
+  end
   local types = {
     E = "error",
     W = "warning",
@@ -427,6 +505,10 @@ local function list_entry_announcement(info, index)
   local line = tonumber(item.lnum) or 0
   if line > 0 then
     table.insert(parts, "line " .. line)
+  end
+  local column = tonumber(item.col) or 0
+  if column > 0 then
+    table.insert(parts, "column " .. column)
   end
   local size = tonumber(info.size) or #items
   table.insert(parts, index .. " of " .. size)
@@ -603,45 +685,154 @@ local function diagnostic_severity_name(severity)
   return name
 end
 
-local function diagnostic_on_line(current, diagnostics)
+local function diagnostic_contains_cursor(diagnostic, current)
+  local row = current.row - 1
+  local column = current.column
+  local first_row = tonumber(diagnostic.lnum) or 0
+  local last_row = tonumber(diagnostic.end_lnum) or first_row
+  if row < first_row or row > last_row then
+    return false
+  end
+
+  local first_column = tonumber(diagnostic.col) or 0
+  local last_column = tonumber(diagnostic.end_col)
+  if first_row == last_row then
+    if row ~= first_row then
+      return false
+    end
+    if not last_column or last_column <= first_column then
+      return column == first_column
+    end
+    return column >= first_column and column < last_column
+  end
+  if row == first_row and column < first_column then
+    return false
+  end
+  if row == last_row and last_column and column >= last_column then
+    return false
+  end
+  return true
+end
+
+local function prefer_diagnostic(selected, candidate)
+  if not selected then
+    return candidate
+  end
+  local selected_severity = tonumber(selected.severity) or math.huge
+  local candidate_severity = tonumber(candidate.severity) or math.huge
+  if candidate_severity ~= selected_severity then
+    return candidate_severity < selected_severity and candidate or selected
+  end
+  local selected_column = tonumber(selected.col) or 0
+  local candidate_column = tonumber(candidate.col) or 0
+  return candidate_column < selected_column and candidate or selected
+end
+
+local function diagnostic_at_cursor_or_line(current, diagnostics, cursor_only)
   diagnostics = diagnostics
     or vim.diagnostic.get(current.buffer, { lnum = current.row - 1 })
-  local selected
+  local selected_at_cursor
+  local selected_on_line
   local count = 0
+  local row = current.row - 1
   for _, diagnostic in ipairs(diagnostics or {}) do
-    if diagnostic.lnum == current.row - 1 then
+    local first_row = tonumber(diagnostic.lnum) or 0
+    local last_row = tonumber(diagnostic.end_lnum) or first_row
+    if row >= first_row and row <= last_row then
       count = count + 1
-      if not selected
-        or (diagnostic.severity or math.huge) < (selected.severity or math.huge)
-      then
-        selected = diagnostic
+      selected_on_line = prefer_diagnostic(selected_on_line, diagnostic)
+      if diagnostic_contains_cursor(diagnostic, current) then
+        selected_at_cursor = prefer_diagnostic(selected_at_cursor, diagnostic)
       end
     end
   end
-  return selected, count
+  if selected_at_cursor then
+    return selected_at_cursor, count, true
+  end
+  if cursor_only then
+    return nil, count, false
+  end
+  return selected_on_line, count, false
 end
 
-local function announce_current_line_diagnostic(current, diagnostics)
-  if not state.options.announce_diagnostics then
+local function diagnostic_identity(diagnostic)
+  return table.concat({
+    diagnostic.namespace or "",
+    diagnostic.lnum or 0,
+    diagnostic.col or 0,
+    diagnostic.end_lnum or diagnostic.lnum or 0,
+    diagnostic.end_col or diagnostic.col or 0,
+    diagnostic.severity or "",
+    diagnostic.source or "",
+    diagnostic.code or "",
+    diagnostic.message or "",
+  }, "\0")
+end
+
+local function diagnostic_announcement(diagnostic, count, detailed)
+  local parts = {
+    diagnostic_severity_name(diagnostic.severity),
+    tostring(diagnostic.message or "diagnostic"),
+  }
+  if detailed then
+    local source = normalize_speech(diagnostic.source)
+    if source then
+      table.insert(parts, source)
+    end
+    if type(diagnostic.code) == "string" or type(diagnostic.code) == "number" then
+      table.insert(parts, "code " .. diagnostic.code)
+    end
+  end
+  if count > 1 then
+    table.insert(parts, (count - 1) .. " more")
+  end
+  return table.concat(parts, ", ")
+end
+
+local function announce_current_line_diagnostic(current, diagnostics, options)
+  options = options or {}
+  if not options.ignore_option and not state.options.announce_diagnostics then
     return false
   end
-  local diagnostic, count = diagnostic_on_line(current, diagnostics)
+  local diagnostic, count, at_cursor = diagnostic_at_cursor_or_line(
+    current,
+    diagnostics,
+    options.cursor_only
+  )
   if not diagnostic then
     state.diagnostic_announcements[current.window] = nil
+    if options.force then
+      return send_speech("no diagnostic")
+    end
     return false
   end
-  local severity = diagnostic_severity_name(diagnostic.severity)
-  local announcement = severity .. ", " .. diagnostic.message
-  if count > 1 then
-    announcement = announcement .. ", " .. (count - 1) .. " more"
-  end
-  local key = table.concat({ current.buffer, current.row, announcement }, "\0")
-  if state.diagnostic_announcements[current.window] == key then
+  local announcement = diagnostic_announcement(diagnostic, count, options.detailed)
+  local key = table.concat({
+    current.buffer,
+    diagnostic_identity(diagnostic),
+    at_cursor and "cursor" or "line",
+  }, "\0")
+  if not options.force and state.diagnostic_announcements[current.window] == key then
     return false
   end
   state.diagnostic_announcements[current.window] = key
   send_speech(announcement)
   return true
+end
+
+function M.announce_current_diagnostic()
+  if not M.activate() then
+    return false
+  end
+  local current = snapshot()
+  if not current then
+    return false
+  end
+  return announce_current_line_diagnostic(current, nil, {
+    detailed = true,
+    force = true,
+    ignore_option = true,
+  })
 end
 
 local function announce_cursor(event)
@@ -689,7 +880,6 @@ local function announce_cursor(event)
         send_line(spoken_line(current), current.indentation)
       end
       announce_closed_fold(current)
-      announce_current_line_diagnostic(current)
     elseif previous.column ~= current.column then
       if not new_spelling then
         local distance = character_distance(current.line, current.column, previous.column)
@@ -705,6 +895,19 @@ local function announce_cursor(event)
     state.last_spelling = spelling and spelling.key or nil
   else
     announce_spelling(current, spelling)
+  end
+  local mode = vim.api.nvim_get_mode().mode
+  if not announced_list_destination
+    and mode == "n"
+    and previous
+    and previous.buffer == current.buffer
+    and unchanged_buffer
+  then
+    if previous.row ~= current.row then
+      announce_current_line_diagnostic(current)
+    elseif previous.column ~= current.column then
+      announce_current_line_diagnostic(current, nil, { cursor_only = true })
+    end
   end
   remember(current)
   providers:refresh_navigation(deferred_navigation)
@@ -1575,8 +1778,12 @@ function M.setup(options)
     pattern = { "BlinkCmpListSelect", "BlinkCmpShow" },
     callback = function() completion:schedule_blink_event_refresh() end,
   })
-  create_autocmd("SafeState", schedule_message_poll)
+  create_autocmd("SafeState", function()
+    ensure_ui_select()
+    schedule_message_poll()
+  end)
 
+  install_ui_select()
   attach_input_listener()
 
   pcall(vim.api.nvim_create_user_command, "LectorSay", function(command)
@@ -1596,6 +1803,9 @@ function M.setup(options)
   pcall(vim.api.nvim_create_user_command, "LectorCompletionDocumentation", function()
     completion:refresh_documentation(state.command_line_active)
     M.read_menu_documentation()
+  end, { force = true })
+  pcall(vim.api.nvim_create_user_command, "LectorDiagnostic", function()
+    M.announce_current_diagnostic()
   end, { force = true })
   pcall(vim.api.nvim_create_user_command, "LectorStatus", function()
     M.announce_status()
@@ -1620,6 +1830,7 @@ function M.teardown()
   if not owns_registrations then
     return
   end
+  restore_ui_select()
   detach_input_listener()
   pcall(vim.api.nvim_del_augroup_by_name, group_name)
   for _, name in ipairs(user_command_names) do

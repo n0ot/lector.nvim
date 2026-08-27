@@ -16,6 +16,22 @@ local function native_item_label(item)
   return abbreviation ~= "" and abbreviation or item.word
 end
 
+local function native_item_source(item)
+  if type(item) ~= "table" then
+    return nil
+  end
+  local lsp_data = vim.tbl_get(item, "user_data", "nvim", "lsp")
+  if type(lsp_data) == "table" then
+    local client_id = tonumber(lsp_data.client_id)
+    local client = client_id and vim.lsp.get_client_by_id(client_id) or nil
+    if client and type(client.name) == "string" and client.name ~= "" then
+      return client.name
+    end
+    return "LSP"
+  end
+  return item.menu
+end
+
 local function blink_documentation(item)
   if not item then
     return nil
@@ -103,7 +119,7 @@ function Completion:refresh_native()
     index = index,
     label = native_item_label(item),
     kind = item and item.kind,
-    source = item and item.menu,
+    source = native_item_source(item),
     documentation = item and item.info,
   })
 end

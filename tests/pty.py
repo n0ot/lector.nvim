@@ -160,6 +160,27 @@ def main() -> int:
             session.wait_for_event("no next item")
             session.send(b":nunmap Q\r")
 
+            session.send(
+                b":lua vim.keymap.set('n','Q',function() "
+                b"vim.ui.select({'first action','second action'},"
+                b"{prompt='Code actions:'},function() end) end)\r"
+            )
+            session.pump(0.2)
+            session.clear()
+            session.send(b"Q")
+            session.wait_for_output(b"Code actions:")
+            session.wait_for_output(b"first action")
+            session.wait_for_event("end")
+            session.pump(0.2)
+            if session.events != ["end"]:
+                raise AssertionError(
+                    f"selector reclaimed semantic policy before closing: {session.events!r}"
+                )
+            session.clear()
+            session.send(b"\x1b")
+            session.wait_for_event("set;auto=0;cursor=0")
+            session.send(b":nunmap Q\r")
+
             session.send(b":let g:lector_cmdline_history_test = 1\r")
             session.pump(0.2)
             session.send(b":\x1b[A")

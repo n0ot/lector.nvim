@@ -131,6 +131,36 @@ end
 clear()
 vim.api.nvim_exec_autocmds("CompleteChanged", { modeline = false })
 equal({ "alpha, function, language server, 1 of 2" }, speech(), "native completion")
+
+local original_get_client_by_id = vim.lsp.get_client_by_id
+vim.lsp.get_client_by_id = function(client_id)
+  if client_id == 42 then
+    return { name = "lua_ls" }
+  end
+end
+vim.fn.complete_info = function()
+  return {
+    pum_visible = 1,
+    selected = 0,
+    items = {
+      {
+        word = "print",
+        kind = "Function",
+        menu = "Prints a value",
+        info = "Print docs",
+        user_data = { nvim = { lsp = { client_id = 42 } } },
+      },
+    },
+  }
+end
+clear()
+vim.api.nvim_exec_autocmds("CompleteChanged", { modeline = false })
+equal(
+  { "print, function, lua_ls, 1 of 1" },
+  speech(),
+  "native LSP completion uses the client name instead of item detail as its source"
+)
+vim.lsp.get_client_by_id = original_get_client_by_id
 vim.fn.complete_info = saved_complete_info
 vim.api.nvim_exec_autocmds("CompleteDone", { modeline = false })
 

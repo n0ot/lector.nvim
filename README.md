@@ -15,11 +15,11 @@ return control to the screen reader.
 
 ## Requirements
 
-- Neovim with API level 14 and `nvim_ui_send()` (currently Neovim 0.13/nightly)
+- Neovim 0.12 or newer, with API level 14 and `nvim_ui_send()`
 - A terminal screen reader implementing the
   [Lector application-accessibility protocol](PROTOCOL.md)
 
-Neovim 0.12 and older remain usable, but `setup()` returns `false` and the
+Neovim 0.11 and older remain usable, but `setup()` returns `false` and the
 plugin sends no terminal messages because those releases do not expose the
 required TUI API. Run `:checkhealth lector` for an explicit compatibility
 report.
@@ -77,6 +77,10 @@ reference.
 - `:LectorStatus` reads buffer, cursor, fold, and Visual-selection status.
 - `:LectorCompletionDocumentation` reads documentation for the selected
   completion item when available.
+- `:LectorDiagnostic` reads the diagnostic at the cursor, or the most severe
+  diagnostic on the current line when the cursor is outside every diagnostic
+  range. Its Lua equivalent is
+  `require("lector").announce_current_diagnostic()`.
 - `:LectorAccessibilityEnable` and `:LectorAccessibilityDisable` control the
   plugin explicitly.
 - `:checkhealth lector` reports compatibility and current state.
@@ -131,6 +135,10 @@ is announced from Neovim's resulting search state. Successful cursor and text
 changes otherwise come directly from Neovim events and before/after state;
 lector.nvim does not interpret normal-mode keys or mapping expansions.
 
+The plugin temporarily yields terminal reading while `vim.ui.select()` is
+active. This keeps Neovim's default selector—and LSP workflows such as code
+actions which use it—readable without replacing a provider's visual UI.
+
 ## Testing
 
 Run every headless and real-TUI test with:
@@ -139,9 +147,10 @@ Run every headless and real-TUI test with:
 ./scripts/test
 ```
 
-The real-TUI test uses only Python's standard library and exercises Neovim
-through a PTY, including the blocking native context-menu loop, transient
-command output, and terminal-buffer handoff.
+The real-TUI tests use only Python's standard library and exercise Neovim
+through a PTY, including a deterministic LSP server, the blocking native
+context-menu loop, selectors, transient command output, and terminal-buffer
+handoff.
 
 ## Architecture
 

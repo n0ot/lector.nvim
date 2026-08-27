@@ -207,7 +207,7 @@ vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
 vim.wait(10)
 equal(
   {
-    "error, bad value, lector-semantics.lua, line 2, 1 of 1",
+    "Build, error, bad value, lector-semantics.lua, line 2, column 1, 1 of 1",
   },
   semantic_text(),
   "a quickfix destination replaces the competing cursor-line announcement"
@@ -232,7 +232,7 @@ vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
 vim.wait(10)
 equal(
   {
-    "warning, local warning, lector-semantics.lua, line 1, 1 of 1",
+    "Window checks, warning, local warning, lector-semantics.lua, line 1, column 1, 1 of 1",
   },
   semantic_text(),
   "a location-list destination uses the window-local list without repeating the line"
@@ -257,7 +257,7 @@ vim.api.nvim_exec_autocmds("CursorMoved", {
 })
 vim.wait(10)
 equal(
-  { "warning, second problem, lector-semantics.lua, line 2, 2 of 2" },
+  { "Open list, warning, second problem, lector-semantics.lua, line 2, 2 of 2" },
   semantic_text(),
   "an open quickfix window reads its structured entry"
 )

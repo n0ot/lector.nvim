@@ -230,6 +230,96 @@ vim.api.nvim_exec_autocmds("DiagnosticChanged", {
 })
 equal({}, speech(), "an unchanged diagnostic event does not repeat")
 
+local diagnostic_namespace = vim.api.nvim_create_namespace("lector-diagnostic-ranges")
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "first second third" })
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.api.nvim_exec_autocmds("BufEnter", { buffer = 0, modeline = false })
+vim.wait(10)
+clear()
+vim.diagnostic.set(diagnostic_namespace, 0, {
+  {
+    lnum = 0,
+    col = 0,
+    end_lnum = 0,
+    end_col = 5,
+    severity = vim.diagnostic.severity.WARN,
+    message = "first issue",
+    source = "fixture",
+    code = "W1",
+  },
+  {
+    lnum = 0,
+    col = 6,
+    end_lnum = 0,
+    end_col = 12,
+    severity = vim.diagnostic.severity.ERROR,
+    message = "second issue",
+    source = "fixture",
+    code = "E2",
+  },
+})
+vim.wait(10)
+equal(
+  { "warning, first issue, 1 more" },
+  speech(),
+  "a diagnostic event prefers the range containing the cursor"
+)
+
+clear()
+vim.api.nvim_win_set_cursor(0, { 1, 6 })
+vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+vim.wait(10)
+equal(
+  { "second", "error, second issue, 1 more" },
+  speech(),
+  "same-line movement announces its destination before a different diagnostic"
+)
+
+clear()
+vim.api.nvim_win_set_cursor(0, { 1, 7 })
+vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+vim.wait(10)
+equal({ "e" }, speech(), "movement within one diagnostic does not repeat it")
+
+clear()
+vim.api.nvim_win_set_cursor(0, { 1, 13 })
+vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+vim.wait(10)
+equal({ "third" }, speech(), "leaving a diagnostic range clears its selection quietly")
+
+clear()
+vim.api.nvim_win_set_cursor(0, { 1, 6 })
+vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+vim.wait(10)
+equal(
+  { "second", "error, second issue, 1 more" },
+  speech(),
+  "reentering a diagnostic range announces it again"
+)
+
+clear()
+assert(lector.announce_current_diagnostic())
+equal(
+  { "error, second issue, fixture, code E2, 1 more" },
+  speech(),
+  "the diagnostic action reads detailed cursor-range information"
+)
+
+vim.api.nvim_win_set_cursor(0, { 1, 13 })
+clear()
+vim.cmd("LectorDiagnostic")
+equal(
+  { "error, second issue, fixture, code E2, 1 more" },
+  speech(),
+  "the diagnostic command falls back to the most severe line diagnostic"
+)
+
+vim.diagnostic.reset(diagnostic_namespace, 0)
+vim.wait(10)
+clear()
+vim.cmd("LectorDiagnostic")
+equal({ "no diagnostic" }, speech(), "the diagnostic command reports an empty location")
+
 clear()
 local original_get_option_value = vim.api.nvim_get_option_value
 vim.api.nvim_get_option_value = function(name, options)
@@ -405,6 +495,32 @@ equal(
   semantic_speech(),
   "buffer entry announces its name without reading the current line"
 )
+
+local manual_diagnostic_namespace = vim.api.nvim_create_namespace(
+  "lector-manual-diagnostic"
+)
+clear()
+vim.diagnostic.set(manual_diagnostic_namespace, 0, {
+  {
+    lnum = 0,
+    col = 0,
+    end_lnum = 0,
+    end_col = 5,
+    severity = vim.diagnostic.severity.WARN,
+    message = "manual diagnostic",
+    source = "fixture",
+    code = "M1",
+  },
+})
+vim.wait(10)
+equal({}, speech(), "disabled automatic diagnostics remain quiet")
+assert(lector.announce_current_diagnostic())
+equal(
+  { "warning, manual diagnostic, fixture, code M1" },
+  speech(),
+  "the explicit diagnostic action works when automatic announcements are disabled"
+)
+vim.diagnostic.reset(manual_diagnostic_namespace, 0)
 
 vim.api.nvim_win_set_cursor(0, { 1, 2 })
 clear()

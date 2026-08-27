@@ -57,6 +57,17 @@ To stop and remove listeners and commands programmatically: >lua
         Read documentation for the currently selected completion item when
         the provider exposes it.
 
+                                             *:LectorDiagnostic*
+:LectorDiagnostic
+        Read the diagnostic containing the cursor. When the cursor is outside
+        every diagnostic range, read the most severe diagnostic on the current
+        line. Source, code, and the number of additional line diagnostics are
+        included when available. Cursor position is intentionally omitted. No
+        default mapping is installed. The Lua equivalent is: >lua
+
+            require("lector").announce_current_diagnostic()
+<
+
                                 *:LectorAccessibilityEnable*
 :LectorAccessibilityEnable
         Enable lector.nvim and reassert semantic policy.
@@ -92,7 +103,9 @@ announce_deletions
 
 announce_diagnostics
         Announce changed diagnostics when entering or revisiting a diagnosed
-        line. Identical events at the same location are coalesced.
+        line. Normal-mode movement into a different diagnostic range announces
+        that diagnostic after the cursor destination. Identical events and
+        movement within the same diagnostic are coalesced.
 
 announce_modes
         Announce meaningful editor mode changes.
@@ -122,7 +135,9 @@ announce_search
         Announce current and total search matches plus wrapping.
 
 announce_quickfix
-        Announce structured quickfix and location-list destinations.
+        Announce structured quickfix and location-list destinations, including
+        list title, entry type and text, file, line, column, and list position
+        when available.
 
 announce_recording
         Announce macro recording start and stop.
@@ -174,6 +189,11 @@ and relevant shell return. It sends end before suspend, exit, and terminal
 buffer entry. The terminal consumer remains responsible for reset,
 alternate-screen, PTY, and pane-local failsafes.
 
+While |vim.ui.select()| is active, lector.nvim sends protocol end so the
+terminal screen reader can read the provider's ordinary visual interface.
+Semantic policy is restored when the selection finishes. This includes the
+default selector used by LSP code actions and other multi-choice workflows.
+
 ==============================================================================
 6. Provider APIs                                    *lector-provider-api*
 
@@ -224,9 +244,9 @@ required for a selected item. kind, source, and documentation are optional.
 ==============================================================================
 7. Compatibility                                  *lector-compatibility*
 
-The terminal transport requires Neovim API level 14 and |nvim_ui_send()|,
-currently provided by Neovim 0.13/nightly. Individual newer events such as
-TextPutPost and SearchWrapped are feature-detected and have bounded fallbacks.
+The terminal transport requires Neovim 0.12 or newer, API level 14, and
+|nvim_ui_send()|. Individual newer events such as TextPutPost and SearchWrapped
+are feature-detected and have bounded fallbacks.
 
 The protocol is one-way. checkhealth can validate the producer but cannot ask
 whether the host terminal consumed a message.

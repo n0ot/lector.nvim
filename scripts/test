@@ -10,3 +10,4 @@ for suite in completion editing command_output semantics reload; do
 done
 
 PYTHONDONTWRITEBYTECODE=1 python3 tests/pty.py
+PYTHONDONTWRITEBYTECODE=1 python3 tests/lsp.py
