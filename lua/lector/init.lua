@@ -46,6 +46,7 @@ end
 local state = {
   enabled = false,
   active = false,
+  automatic_reading = false,
   options = {},
   windows = {},
   text_windows = {},
@@ -53,6 +54,7 @@ local state = {
   command_lines = {},
   command_line_active = false,
   command_line_level = 0,
+  pending_command_line_announcements = {},
   pending_insert_diagnostics = {},
   suppress_next_cursor = nil,
   last_mode = nil,
@@ -142,11 +144,12 @@ function M.activate()
   })
   if ok and buftype == "terminal" then
     if state.terminal_command_line then
-      if state.active then
+      if state.active and not state.automatic_reading then
         return true
       end
       local sent = protocol.send("set;auto=0;cursor=0")
       state.active = sent
+      state.automatic_reading = false
       return sent
     end
     if not state.terminal_fallback then
@@ -157,11 +160,12 @@ function M.activate()
     return false
   end
   state.terminal_fallback = false
-  if state.active then
+  if state.active and not state.automatic_reading then
     return true
   end
   local sent = protocol.send("set;auto=0;cursor=0")
   state.active = sent
+  state.automatic_reading = false
   return sent
 end
 
@@ -170,6 +174,29 @@ function M.deactivate()
     protocol.send("end")
   end
   state.active = false
+  state.automatic_reading = false
+end
+
+local function yield_automatic_reading()
+  if not state.active then
+    return false
+  end
+  if state.automatic_reading then
+    return true
+  end
+  local sent = protocol.send("set;auto=1;cursor=0")
+  if sent then
+    state.automatic_reading = true
+  end
+  return sent
+end
+
+local function begin_automatic_output_fallback()
+  if not state.options.announce_messages then
+    return false
+  end
+  state.command_output_fallback = true
+  return yield_automatic_reading()
 end
 
 function M.say(text)
@@ -1108,9 +1135,6 @@ local function announce_command_line(event)
   state.command_line_level = level
   state.command_line_active = true
   remember_command_line(level)
-  if not state.options.announce_command_line then
-    return
-  end
   local names = {
     [":"] = "command",
     ["/"] = "search",
@@ -1118,7 +1142,25 @@ local function announce_command_line(event)
     ["="] = "expression",
     ["@"] = "input",
   }
-  send_speech(names[vim.fn.getcmdtype()] or "command")
+  local name = names[vim.fn.getcmdtype()] or "command"
+  -- A command line which survives the current input transaction is an
+  -- interactive editor state. One which enters and leaves before this runs is
+  -- only an implementation detail of that transaction.
+  local pending = {}
+  local lifecycle_generation = state.lifecycle_generation
+  state.pending_command_line_announcements[level] = pending
+  vim.schedule(function()
+    if lifecycle_is_current(lifecycle_generation)
+      and state.pending_command_line_announcements[level] == pending
+      and state.command_line_active
+      and state.command_line_level == level
+    then
+      state.pending_command_line_announcements[level] = nil
+      if state.options.announce_command_line then
+        send_speech(name)
+      end
+    end
+  end)
 end
 
 local function command_line_change(previous, current)
@@ -1161,6 +1203,10 @@ local function announce_current_command_line(level)
   end
   local current = current_command_line(level)
   if not current then
+    return
+  end
+  if state.pending_command_line_announcements[level] then
+    state.command_lines[level] = current
     return
   end
   if menu_is_open() then
@@ -1388,8 +1434,10 @@ local function attach_input_listener()
 
   -- Input is only a transaction boundary here. Editor semantics come from
   -- Neovim state and events; literal keys are interpreted only while
-  -- lector.nvim owns a context menu.
-  vim.on_key(function(resolved_key)
+  -- lector.nvim owns a context menu. Lua mapping callbacks are opaque editor
+  -- actions, so automatic output reading is pre-armed without cursor tracking
+  -- until their resulting state is observable.
+  vim.on_key(function(resolved_key, typed_key)
     if not state.enabled then
       return
     end
@@ -1404,6 +1452,21 @@ local function attach_input_listener()
     restore_command_output_fallback()
     edits:observe_input_state()
     schedule_message_poll()
+    local mode = vim.api.nvim_get_mode().mode:sub(1, 1)
+    local ok_mapping, mapping = pcall(
+      vim.fn.maparg,
+      typed_key,
+      mode,
+      false,
+      true
+    )
+    if ok_mapping
+      and type(mapping) == "table"
+      and type(mapping.callback) == "function"
+      and not state.command_line_active
+    then
+      begin_automatic_output_fallback()
+    end
     schedule_fold_observation()
     schedule_floating_window_scan()
   end, state.input_namespace)
@@ -1540,6 +1603,7 @@ function M.health_info()
     ui_send_available = protocol.available(),
     enabled = state.enabled,
     active = state.active,
+    automatic_reading = state.automatic_reading,
     terminal_fallback = state.terminal_fallback,
     text_put_post = autocmd_supported("TextPutPost"),
     search_wrapped = autocmd_supported("SearchWrapped"),
@@ -1558,6 +1622,7 @@ local function invalidate_deferred_work()
   state.command_lines = {}
   state.command_line_active = false
   state.command_line_level = 0
+  state.pending_command_line_announcements = {}
   edits:reset()
   state.pending_insert_diagnostics = {}
   state.suppress_next_cursor = nil
@@ -1566,6 +1631,7 @@ local function invalidate_deferred_work()
   state.terminal_fallback = false
   state.terminal_command_line = false
   state.command_output_fallback = false
+  state.automatic_reading = false
   state.discard_pending_messages = false
   state.message_poll_scheduled = false
 end
@@ -1596,6 +1662,7 @@ function M.setup(options)
   state.command_lines = {}
   state.command_line_active = false
   state.command_line_level = 0
+  state.pending_command_line_announcements = {}
   providers:reset()
   edits:reset()
   state.pending_insert_diagnostics = {}
@@ -1691,6 +1758,8 @@ function M.setup(options)
   create_autocmd("CmdlineLeave", function(event)
     local event_level = event and event.data and event.data.cmdlevel
     local level = tonumber(event_level) or state.command_line_level
+    local transient_command_line = state.pending_command_line_announcements[level] ~= nil
+    state.pending_command_line_announcements[level] = nil
     local command_type = event and (event.match or (event.data and event.data.cmdtype))
     local aborted = event and event.data and event.data.abort
     local command_executed = state.options.announce_messages
@@ -1715,8 +1784,12 @@ function M.setup(options)
         M.activate()
       end)
     elseif command_executed and not state.command_line_active then
-      state.command_output_fallback = true
-      M.deactivate()
+      if transient_command_line then
+        begin_automatic_output_fallback()
+      else
+        state.command_output_fallback = true
+        M.deactivate()
+      end
     else
       M.activate()
     end

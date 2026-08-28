@@ -67,7 +67,10 @@ class Nvim:
     def pump(self, seconds: float = 0.05) -> None:
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
-            ready, _, _ = select.select([self.master], [], [], min(0.02, deadline - time.monotonic()))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            ready, _, _ = select.select([self.master], [], [], min(0.02, remaining))
             if not ready:
                 continue
             try:
@@ -141,14 +144,131 @@ def main() -> int:
         try:
             session.wait_for_event("unnamed buffer")
 
+            session.send(b"i{}\x1b")
+            session.pump(0.2)
+            session.clear()
+            session.send(b"%")
+            session.wait_for_event("{")
+            session.pump(0.2)
+            if session.events != [
+                "set;auto=1;cursor=0",
+                "set;auto=0;cursor=0",
+                "{",
+            ]:
+                raise AssertionError(
+                    f"mapped percent motion yielded cursor tracking: {session.events!r}"
+                )
+
+            session.send(
+                b":lua vim.keymap.set('n','Q',function() "
+                b"vim.cmd('normal! %') end)\r"
+            )
+            session.pump(0.2)
+            session.clear()
+            session.send(b"Q")
+            session.wait_for_event("}")
+            session.pump(0.2)
+            if session.events != [
+                "set;auto=1;cursor=0",
+                "set;auto=0;cursor=0",
+                "}",
+            ]:
+                raise AssertionError(
+                    f"Lua command motion had competing speech: {session.events!r}"
+                )
+            session.send(b":nunmap Q\r")
+            session.send(b"dd")
+
+            session.send(b":nnoremap Q :\r")
+            session.clear()
+            session.send(b"Q")
+            session.wait_for_event("command")
+            session.send(b"\x1b")
+            session.send(b":nunmap Q\r")
+
             session.send(b":lua vim.keymap.set('n','Q',function() end)\r")
             session.clear()
             session.send(b"Q")
             session.pump(0.2)
-            if session.events:
+            if session.events != [
+                "set;auto=1;cursor=0",
+                "set;auto=0;cursor=0",
+            ]:
                 raise AssertionError(
-                    f"harmless input changed semantic policy: {session.events!r}"
+                    f"harmless Lua mapping enabled cursor tracking: {session.events!r}"
                 )
+            session.send(b":nunmap Q\r")
+
+            session.send(
+                b":lua vim.keymap.set('n','Q',function() "
+                b"vim.api.nvim_echo({{'lua mapping output'}},false,{}) end)\r"
+            )
+            session.pump(0.2)
+            session.clear()
+            session.send(b"Q")
+            session.wait_for_output(b"lua mapping output")
+            session.pump(0.2)
+            if session.events != [
+                "set;auto=1;cursor=0",
+                "set;auto=0;cursor=0",
+            ]:
+                raise AssertionError(
+                    f"Lua mapping output had competing speech: {session.events!r}"
+                )
+
+            session.send(
+                b":lua vim.keymap.set('n','Q',function() "
+                b"vim.api.nvim_echo({{'first\\nsecond'}},false,{}) end)\r"
+            )
+            session.pump(0.2)
+            session.clear()
+            session.send(b"Q")
+            session.wait_for_output(b"Press ENTER")
+            session.wait_for_event("set;auto=1;cursor=0")
+            session.pump(0.2)
+            if session.events != ["set;auto=1;cursor=0"]:
+                raise AssertionError(
+                    f"Lua hit-enter prompt lost automatic reading: {session.events!r}"
+                )
+            session.send(b"\r")
+            session.wait_for_event("set;auto=0;cursor=0")
+
+            session.send(
+                b":lua vim.keymap.set('n','Q',function() "
+                b"vim.api.nvim_feedkeys(':','n',false) end)\r"
+            )
+            session.pump(0.2)
+            session.clear()
+            session.send(b"Q")
+            session.wait_for_event("command")
+            session.pump(0.2)
+            if session.events != [
+                "set;auto=1;cursor=0",
+                "set;auto=0;cursor=0",
+                "command",
+            ]:
+                raise AssertionError(
+                    f"Lua mapping command line was not interactive: {session.events!r}"
+                )
+            session.send(b"\x1b")
+
+            session.send(
+                b":lua vim.keymap.set('n','Q',function() local lines={}; "
+                b"for i=1,40 do lines[i]=tostring(i) end; "
+                b"vim.api.nvim_echo({{table.concat(lines,'\\n')}},false,{}) end)\r"
+            )
+            session.pump(0.2)
+            session.clear()
+            session.send(b"Q")
+            session.wait_for_output(b"-- More --")
+            session.wait_for_event("set;auto=1;cursor=0")
+            session.pump(0.2)
+            if session.events != ["set;auto=1;cursor=0"]:
+                raise AssertionError(
+                    f"Lua mapping pager did not retain automatic reading: {session.events!r}"
+                )
+            session.send(b"q")
+            session.wait_for_event("set;auto=0;cursor=0")
             session.send(b":nunmap Q\r")
 
             session.send(
@@ -172,7 +292,7 @@ def main() -> int:
             session.wait_for_output(b"first action")
             session.wait_for_event("end")
             session.pump(0.2)
-            if session.events != ["end"]:
+            if session.events != ["set;auto=1;cursor=0", "end"]:
                 raise AssertionError(
                     f"selector reclaimed semantic policy before closing: {session.events!r}"
                 )
@@ -434,7 +554,10 @@ def main() -> int:
                 raise AssertionError(f"submenu close was announced: {session.events!r}")
 
             session.clear()
-            session.send(b":echo 'pty visible output'\r")
+            session.send(b":")
+            session.wait_for_event("command")
+            session.clear()
+            session.send(b"echo 'pty visible output'\r")
             session.wait_for_output(b"pty visible output")
             if "end" not in session.events:
                 raise AssertionError(f"command output did not enter ordinary reading: {session.events!r}")

@@ -64,12 +64,15 @@ local function clear()
   sent = {}
 end
 
-local function enter_command_line()
+local function enter_command_line(stable)
   vim.api.nvim_exec_autocmds("CmdlineEnter", {
     pattern = ":",
     data = { cmdlevel = 1, cmdtype = ":" },
     modeline = false,
   })
+  if stable ~= false then
+    vim.wait(20)
+  end
 end
 
 local function leave_command_line(abort)
@@ -118,6 +121,19 @@ equal(
   "ordinary normal-mode input keeps cursor suppression active"
 )
 vim.api.nvim_get_mode = original_get_mode
+
+clear()
+enter_command_line(false)
+leave_command_line(false)
+vim.wait(20)
+equal(
+  {
+    "set;auto=1;cursor=0",
+    "set;auto=0;cursor=0",
+  },
+  protocol_commands(),
+  "a transient Ex implementation enables output reading without cursor tracking"
+)
 
 clear()
 enter_command_line()

@@ -172,6 +172,13 @@ expansions have no semantic meaning to lector.nvim. Fold, search, quickfix,
 recording, spelling, diagnostic, command-line, message, and window state come
 from documented Neovim APIs and events.
 
+A command line which remains open beyond its input transaction is announced
+as interactive editor state. One which enters and leaves within the same
+transaction is treated as an implementation detail. Opaque Lua mapping
+callbacks temporarily allow automatic output reading while keeping cursor
+tracking suppressed. Semantic policy resumes when the callback returns, or
+remains yielded if Neovim stops at a pager or hit-enter prompt.
+
 Window and menu closure is silent. When a close moves focus to another editor
 context, the destination is announced through the ordinary window- or
 buffer-entry semantics instead of describing the implementation-level close.

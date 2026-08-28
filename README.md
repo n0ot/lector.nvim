@@ -134,6 +134,12 @@ end)
 is announced from Neovim's resulting search state. Successful cursor and text
 changes otherwise come directly from Neovim events and before/after state;
 lector.nvim does not interpret normal-mode keys or mapping expansions.
+A command line which remains open beyond its input transaction is announced
+as interactive editor state. One which enters and leaves within the same
+transaction is treated as an implementation detail. Opaque Lua mapping
+callbacks temporarily allow automatic output reading while keeping cursor
+tracking suppressed; semantic policy resumes when the callback returns, or
+remains yielded if Neovim stops at a pager or hit-enter prompt.
 
 The plugin temporarily yields terminal reading while `vim.ui.select()` is
 active. This keeps Neovim's default selector—and LSP workflows such as code
