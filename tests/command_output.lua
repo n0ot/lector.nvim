@@ -123,6 +123,37 @@ equal(
 vim.api.nvim_get_mode = original_get_mode
 
 clear()
+vim.api.nvim_get_mode = function()
+  return { mode = "x", blocking = false }
+end
+vim.api.nvim_exec_autocmds("ModeChanged", {
+  pattern = "n:x",
+  modeline = false,
+})
+equal(
+  { "end" },
+  protocol_commands(),
+  "an unknown future mode fails open to ordinary screen reading"
+)
+vim.api.nvim_get_mode = function()
+  return { mode = "n", blocking = false }
+end
+vim.api.nvim_exec_autocmds("ModeChanged", {
+  pattern = "x:n",
+  modeline = false,
+})
+equal(
+  {
+    "end",
+    "set;auto=0;cursor=0",
+    "say;6e6f726d616c",
+  },
+  protocol_commands(),
+  "returning to a known editor mode restores semantic policy"
+)
+vim.api.nvim_get_mode = original_get_mode
+
+clear()
 enter_command_line(false)
 leave_command_line(false)
 vim.wait(20)

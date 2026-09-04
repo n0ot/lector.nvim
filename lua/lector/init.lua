@@ -7,11 +7,15 @@ local context_menu_module = require("lector.context_menu")
 local edits_module = require("lector.edits")
 local editor = require("lector.editor")
 local menus_module = require("lector.menus")
+local policy = require("lector.policy")
 local protocol = require("lector.protocol")
 local completion
 local edits
 local providers_module = require("lector.providers")
 local providers
+local transient_output_module = require("lector.transient_output")
+local transient_output
+local menu_is_open
 
 local character_at_cursor = editor.character_at_cursor
 local character_distance = editor.character_distance
@@ -78,9 +82,9 @@ local state = {
   speech_generation = 0,
   lifecycle_generation = 0,
   deferred_timers = {},
-  ui_select_original = nil,
-  ui_select_wrapper = nil,
-  ui_select_transactions = {},
+  ui_originals = {},
+  ui_wrappers = {},
+  ui_transactions = {},
 }
 
 local defaults = {
@@ -134,8 +138,31 @@ local function send_line(text, indentation)
   return sent
 end
 
-function M.activate()
-  if not state.enabled or next(state.ui_select_transactions) ~= nil then
+local function current_window_config()
+  local ok_window, window = pcall(vim.api.nvim_get_current_win)
+  if not ok_window then
+    return {}
+  end
+  local ok_config, config = pcall(vim.api.nvim_win_get_config, window)
+  return ok_config and type(config) == "table" and config or {}
+end
+
+local function editor_owns_current_context(buftype)
+  local ok_mode, current_mode = pcall(vim.api.nvim_get_mode)
+  local mode = ok_mode and current_mode and current_mode.mode or ""
+  return policy.editor_owns({
+    mode = mode,
+    buftype = buftype or "",
+    terminal = buftype == "terminal",
+    window_config = current_window_config(),
+    command_line_active = state.command_line_active,
+    menu_active = menu_is_open and menu_is_open() or false,
+    ui_transaction = next(state.ui_transactions) ~= nil,
+  })
+end
+
+local function activate_semantic_policy(force)
+  if not state.enabled or next(state.ui_transactions) ~= nil then
     return false
   end
   state.command_output_fallback = false
@@ -160,6 +187,10 @@ function M.activate()
     return false
   end
   state.terminal_fallback = false
+  if not force and not editor_owns_current_context(ok and buftype or "") then
+    M.deactivate()
+    return false
+  end
   if state.active and not state.automatic_reading then
     return true
   end
@@ -167,6 +198,10 @@ function M.activate()
   state.active = sent
   state.automatic_reading = false
   return sent
+end
+
+function M.activate()
+  return activate_semantic_policy(false)
 end
 
 function M.deactivate()
@@ -198,6 +233,15 @@ local function begin_automatic_output_fallback()
   state.command_output_fallback = true
   return yield_automatic_reading()
 end
+
+local function native_text_prompt_active()
+  local ok, command_type = pcall(vim.fn.getcmdtype)
+  return ok and command_type == "-"
+end
+
+transient_output = transient_output_module.new({
+  begin_output = begin_automatic_output_fallback,
+})
 
 function M.say(text)
   if not M.activate() then
@@ -258,7 +302,7 @@ completion = completion_module.new({
   options = function() return state.options end,
 })
 
-local function menu_is_open()
+menu_is_open = function()
   return menus:is_open()
 end
 
@@ -280,69 +324,88 @@ local function close_all_menus()
   menus:reset()
 end
 
-local function restore_ui_select()
-  if state.ui_select_wrapper
-    and vim.ui
-    and vim.ui.select == state.ui_select_wrapper
-  then
-    vim.ui.select = state.ui_select_original
+local ui_callback_positions = {
+  input = 2,
+  select = 3,
+}
+
+local function restore_ui_function(name)
+  local wrapper = state.ui_wrappers[name]
+  if wrapper and vim.ui and vim.ui[name] == wrapper then
+    vim.ui[name] = state.ui_originals[name]
   end
-  state.ui_select_original = nil
-  state.ui_select_wrapper = nil
+  state.ui_originals[name] = nil
+  state.ui_wrappers[name] = nil
 end
 
-local function install_ui_select()
-  restore_ui_select()
-  if not vim.ui or type(vim.ui.select) ~= "function" then
+local function restore_ui_functions()
+  for name in pairs(ui_callback_positions) do
+    restore_ui_function(name)
+  end
+end
+
+local function finish_ui_transaction(transaction)
+  if not state.ui_transactions[transaction] then
     return
   end
-  local original = vim.ui.select
-  local wrapper
-  wrapper = function(items, options, on_choice)
-    if not state.enabled or type(on_choice) ~= "function" then
-      return original(items, options, on_choice)
+  state.ui_transactions[transaction] = nil
+  if not next(state.ui_transactions) and state.enabled then
+    M.activate()
+  end
+end
+
+local function install_ui_function(name, callback_position)
+  restore_ui_function(name)
+  if not vim.ui or type(vim.ui[name]) ~= "function" then
+    return
+  end
+  local original = vim.ui[name]
+  local wrapper = function(...)
+    local arguments = pack_values(...)
+    local callback = arguments[callback_position]
+    if not state.enabled or type(callback) ~= "function" then
+      return original(unpack_values(arguments, 1, arguments.n))
     end
 
-    local completed = false
     local transaction = {}
-    state.ui_select_transactions[transaction] = true
+    state.ui_transactions[transaction] = true
     close_all_menus()
     M.deactivate()
 
-    local function finish(...)
-      if not completed then
-        completed = true
-        state.ui_select_transactions[transaction] = nil
-        if not next(state.ui_select_transactions) and state.enabled then
-          M.activate()
-        end
-      end
-      return on_choice(...)
+    arguments[callback_position] = function(...)
+      finish_ui_transaction(transaction)
+      return callback(...)
     end
-
-    local results = pack_values(pcall(original, items, options, finish))
+    local results = pack_values(pcall(
+      original,
+      unpack_values(arguments, 1, arguments.n)
+    ))
     if not results[1] then
-      if not completed then
-        completed = true
-        state.ui_select_transactions[transaction] = nil
-        if not next(state.ui_select_transactions) and state.enabled then
-          M.activate()
-        end
-      end
+      finish_ui_transaction(transaction)
       error(results[2], 0)
     end
     return unpack_values(results, 2, results.n)
   end
-  state.ui_select_original = original
-  state.ui_select_wrapper = wrapper
-  vim.ui.select = wrapper
+  state.ui_originals[name] = original
+  state.ui_wrappers[name] = wrapper
+  vim.ui[name] = wrapper
 end
 
-local function ensure_ui_select()
-  if state.ui_select_wrapper and vim.ui and vim.ui.select == state.ui_select_wrapper then
-    return
+local function install_ui_functions()
+  for name, callback_position in pairs(ui_callback_positions) do
+    install_ui_function(name, callback_position)
   end
-  install_ui_select()
+end
+
+local function ensure_ui_functions()
+  for name, callback_position in pairs(ui_callback_positions) do
+    if not state.ui_wrappers[name]
+      or not vim.ui
+      or vim.ui[name] ~= state.ui_wrappers[name]
+    then
+      install_ui_function(name, callback_position)
+    end
+  end
 end
 
 local function remember(current)
@@ -963,6 +1026,7 @@ local function announce_mode(event)
   local command_output_owns_transition = state.command_output_fallback
     and (mode_kind == "r"
       or mode_kind == "!"
+      or (mode_kind == "c" and native_text_prompt_active())
       or previous_kind == "r"
       or (previous_kind == "c" and mode_kind == "n"))
   if command_output_owns_transition then
@@ -1049,8 +1113,9 @@ local function prepare_to_leave_terminal(event)
     return
   end
   state.terminal_fallback = false
-  local sent = send("set;auto=0;cursor=0")
+  local sent = protocol.send("set;auto=0;cursor=0")
   state.active = sent
+  state.automatic_reading = false
 end
 
 local function announce_diagnostics(event)
@@ -1129,12 +1194,22 @@ local function announce_command_line(event)
   if state.terminal_fallback then
     state.terminal_command_line = true
   end
-  M.activate()
   local event_level = event and event.data and event.data.cmdlevel
   local level = tonumber(event_level) or state.command_line_level + 1
   state.command_line_level = level
   state.command_line_active = true
   remember_command_line(level)
+  local command_type = event and (event.match or (event.data and event.data.cmdtype))
+  command_type = command_type or vim.fn.getcmdtype()
+  -- z= and a few other native interfaces use the text-entry command line
+  -- after drawing output that is meaningful as a whole. Keep ordinary
+  -- terminal reading active for that prompt rather than reducing it to the
+  -- generic command-line announcement.
+  if command_type == "-" and state.options.announce_messages then
+    begin_automatic_output_fallback()
+    return
+  end
+  M.activate()
   local names = {
     [":"] = "command",
     ["/"] = "search",
@@ -1142,7 +1217,7 @@ local function announce_command_line(event)
     ["="] = "expression",
     ["@"] = "input",
   }
-  local name = names[vim.fn.getcmdtype()] or "command"
+  local name = names[command_type] or "command"
   -- A command line which survives the current input transaction is an
   -- interactive editor state. One which enters and leaves before this runs is
   -- only an implementation detail of that transaction.
@@ -1295,7 +1370,10 @@ local function poll_messages()
   if state.command_output_fallback then
     local ok_mode, current_mode = pcall(vim.api.nvim_get_mode)
     local mode = ok_mode and current_mode and current_mode.mode or ""
-    if mode:sub(1, 1) == "r" or mode:sub(1, 1) == "!" then
+    if mode:sub(1, 1) == "r"
+      or mode:sub(1, 1) == "!"
+      or native_text_prompt_active()
+    then
       return
     end
     M.activate()
@@ -1404,7 +1482,7 @@ local function attach_input_listener()
         state.discard_pending_messages = true
       end
       suppress_prompt_return()
-      M.activate()
+      activate_semantic_policy(true)
       return true
     end
     if not fallback_active then
@@ -1426,17 +1504,18 @@ local function attach_input_listener()
       if name:sub(1, 1) ~= "r" and name:sub(1, 1) ~= "!" then
         state.discard_pending_messages = true
         suppress_prompt_return()
-        M.activate()
+        activate_semantic_policy(true)
       end
     end)
     return true
   end
 
-  -- Input is only a transaction boundary here. Editor semantics come from
-  -- Neovim state and events; literal keys are interpreted only while
-  -- lector.nvim owns a context menu. Lua mapping callbacks are opaque editor
-  -- actions, so automatic output reading is pre-armed without cursor tracking
-  -- until their resulting state is observable.
+  -- Input is primarily a transaction boundary here. Editor semantics come
+  -- from Neovim state and events. The small set of native commands which draw
+  -- output directly is recognized before it renders, and context-menu keys
+  -- are interpreted while lector.nvim owns that menu. Opaque mapping actions
+  -- pre-arm automatic output reading without cursor tracking until their
+  -- resulting state is observable.
   vim.on_key(function(resolved_key, typed_key)
     if not state.enabled then
       return
@@ -1449,10 +1528,26 @@ local function attach_input_listener()
       end
       return
     end
-    restore_command_output_fallback()
+    local restored_output = restore_command_output_fallback()
+    local ok_buftype, buftype = pcall(vim.api.nvim_get_option_value, "buftype", {
+      buf = vim.api.nvim_get_current_buf(),
+    })
+    if not restored_output
+      and not editor_owns_current_context(ok_buftype and buftype or "")
+    then
+      M.deactivate()
+      schedule_floating_window_scan()
+      return
+    end
+    if restored_output then
+      schedule_message_poll()
+      schedule_floating_window_scan()
+      return
+    end
     edits:observe_input_state()
     schedule_message_poll()
     local mode = vim.api.nvim_get_mode().mode:sub(1, 1)
+    transient_output:observe_key(resolved_key, mode, vim.v.count)
     local ok_mapping, mapping = pcall(
       vim.fn.maparg,
       typed_key,
@@ -1460,11 +1555,18 @@ local function attach_input_listener()
       false,
       true
     )
-    if ok_mapping
+    local mapping_rhs = ok_mapping
       and type(mapping) == "table"
-      and type(mapping.callback) == "function"
-      and not state.command_line_active
-    then
+      and type(mapping.rhs) == "string"
+      and mapping.rhs:lower()
+      or ""
+    local opaque_mapping = ok_mapping
+      and type(mapping) == "table"
+      and (type(mapping.callback) == "function"
+        or mapping.expr == true
+        or tonumber(mapping.expr) == 1
+        or mapping_rhs:find("<cmd>", 1, true) ~= nil)
+    if opaque_mapping and not state.command_line_active then
       begin_automatic_output_fallback()
     end
     schedule_fold_observation()
@@ -1615,6 +1717,7 @@ local function invalidate_deferred_work()
   state.lifecycle_generation = state.lifecycle_generation + 1
   completion:invalidate()
   providers:reset()
+  transient_output:reset()
   state.fold_observation_generation = state.fold_observation_generation + 1
   state.buffer_announcement_generation = state.buffer_announcement_generation + 1
   state.cursor_announcement_generation = state.cursor_announcement_generation + 1
@@ -1634,6 +1737,7 @@ local function invalidate_deferred_work()
   state.automatic_reading = false
   state.discard_pending_messages = false
   state.message_poll_scheduled = false
+  state.ui_transactions = {}
 end
 
 function M.setup(options)
@@ -1664,6 +1768,7 @@ function M.setup(options)
   state.command_line_level = 0
   state.pending_command_line_announcements = {}
   providers:reset()
+  transient_output:reset()
   edits:reset()
   state.pending_insert_diagnostics = {}
   state.suppress_next_cursor = nil
@@ -1682,6 +1787,7 @@ function M.setup(options)
   state.fold_observation_generation = state.fold_observation_generation + 1
   state.message_poll_scheduled = false
   state.message_history = read_message_history()
+  state.ui_transactions = {}
   state.buffer_announcement_generation = state.buffer_announcement_generation + 1
   state.cursor_announcement_generation = state.cursor_announcement_generation + 1
 
@@ -1746,6 +1852,9 @@ function M.setup(options)
   create_autocmd("DiagnosticChanged", announce_diagnostics)
   create_autocmd("CmdlineEnter", announce_command_line)
   create_autocmd("CmdlineChanged", function()
+    if state.command_output_fallback and native_text_prompt_active() then
+      return
+    end
     M.activate()
     completion:refresh_command_line()
     announce_current_command_line(state.command_line_level)
@@ -1823,11 +1932,11 @@ function M.setup(options)
     callback = function() completion:schedule_blink_event_refresh() end,
   })
   create_autocmd("SafeState", function()
-    ensure_ui_select()
+    ensure_ui_functions()
     schedule_message_poll()
   end)
 
-  install_ui_select()
+  install_ui_functions()
   attach_input_listener()
 
   pcall(vim.api.nvim_create_user_command, "LectorSay", function(command)
@@ -1874,7 +1983,7 @@ function M.teardown()
   if not owns_registrations then
     return
   end
-  restore_ui_select()
+  restore_ui_functions()
   detach_input_listener()
   pcall(vim.api.nvim_del_augroup_by_name, group_name)
   for _, name in ipairs(user_command_names) do

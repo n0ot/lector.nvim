@@ -56,17 +56,23 @@ replace the previous callbacks, deferred work, commands, and autocmds.
   navigation destinations, editor modes, indentation changes, and Visual
   selections
 - Character, word, or line destinations after matching deletion units, put
-  summaries, numeric changes, folds, searches, spelling errors, and macro
-  recording
+  summaries, numeric changes, folds, searches, spelling errors and suggestion
+  lists, and macro recording
 - Diagnostics, messages, quickfix and location-list entries, command-line
   editing, native completion, and optional Blink completion details
 - Informational floating windows, native context menus, and terminal-buffer
   handoff
 
-Input which may produce transient terminal output temporarily restores the
-screen reader's ordinary reading. This preserves Neovim's visual presentation
-for `:echo`, errors, hit-enter prompts, pagers, external commands, and similar
-interfaces instead of reconstructing or repeating their screen output in Lua.
+Lector suppresses terminal heuristics only while it owns a predictable editor
+context: Normal, operator-pending, Insert, Replace, Visual, Select, and
+semantic command-line editing. Native output such as `z=`, `[I`, `g<`, tag
+selection, keyword lookup, hit-enter output, and pagers enables automatic
+reading before it renders while leaving cursor tracking suppressed. Focused
+floating UIs, prompt buffers, `vim.ui.select()`, `vim.ui.input()`, terminal
+jobs, and unknown future modes instead restore the screen reader's complete
+ordinary policy. Informational non-focused floats are announced semantically.
+Ordinary movement, editing, and entry into Visual mode never enable automatic
+reading.
 
 See [`:help lector.nvim`](doc/lector.txt) for the complete behavior and option
 reference.
@@ -139,11 +145,15 @@ as interactive editor state. One which enters and leaves within the same
 transaction is treated as an implementation detail. Opaque Lua mapping
 callbacks temporarily allow automatic output reading while keeping cursor
 tracking suppressed; semantic policy resumes when the callback returns, or
-remains yielded if Neovim stops at a pager or hit-enter prompt.
+remains yielded if Neovim stops at a pager or hit-enter prompt. If the callback
+instead enters a focused floating or prompt UI, lector.nvim sends protocol
+`end` and leaves both terminal reading features available until editor focus
+returns.
 
-The plugin temporarily yields terminal reading while `vim.ui.select()` is
-active. This keeps Neovim's default selector—and LSP workflows such as code
-actions which use it—readable without replacing a provider's visual UI.
+The plugin yields its complete policy while `vim.ui.select()` or
+`vim.ui.input()` is active. This keeps default and third-party providers—and
+LSP workflows such as code actions which use them—readable without replacing
+their visual UI.
 
 ## Testing
 
@@ -164,6 +174,10 @@ handoff.
 policy. Cohesive behavior lives in smaller modules:
 
 - `protocol.lua` owns APC framing and speech sanitization.
+- `policy.lua` decides whether the editor or an external interactive UI owns
+  screen-reader policy.
+- `transient_output.lua` recognizes native commands which render output
+  without passing through an Ex-command boundary.
 - `editor.lua` provides stateless editor snapshots, text inspection, and diffs.
 - `edits.lua` classifies text effects and owns edit-observation state.
 - `providers.lua` owns provider navigation and search transactions.

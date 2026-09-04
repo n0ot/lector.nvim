@@ -112,7 +112,7 @@ announce_modes
 
 announce_messages
         Announce recorded messages and yield transient output to ordinary
-        terminal reading.
+        terminal reading, including the native |z=| spelling-suggestion list.
 
 announce_floating_windows
         Announce newly displayed informational floating windows. Provider UI
@@ -183,23 +183,37 @@ Window and menu closure is silent. When a close moves focus to another editor
 context, the destination is announced through the ordinary window- or
 buffer-entry semantics instead of describing the implementation-level close.
 
-Actions which may display output send protocol end before Neovim processes the
-action. Visible output is left to ordinary terminal reading and is not
-repeated as synthetic speech. A resulting semantic event immediately reclaims
-policy. If Neovim
-instead enters a pager, hit-enter prompt, confirmation, external command, or
-terminal buffer, ordinary screen-reader behavior remains active until Neovim
-returns. Visual presentation is not reconstructed or removed.
+Actions which may display output yield to ordinary terminal reading before
+Neovim processes the action. Visible output is not repeated as synthetic
+speech. A resulting semantic event immediately reclaims policy. Output-only
+interfaces such as pagers and hit-enter prompts enable automatic reading but
+keep cursor tracking suppressed because their terminal cursor is a rendering
+detail. Visual presentation is not reconstructed or removed.
+
+Lector owns predictable editor contexts: Normal, operator-pending, Insert,
+Replace, Visual, Select, and semantic command-line editing. A focused floating
+UI, a prompt buffer, a terminal job, an external command, or an unknown future
+mode instead receives the screen reader's complete ordinary policy, including
+cursor tracking. Policy is reclaimed when focus returns to an owned editor
+context. Newly displayed informational, non-focused floating windows continue
+to be announced semantically.
+
+Native Normal- and Visual-mode commands which directly render output are
+recognized before that output appears. These include |z=|, |[i|, |[I|, |[d|,
+|[D| and their `]` counterparts, |g<|, |g]|, character information, tag
+selection, and keyword lookup. Entering Visual mode and ordinary editor
+navigation never enable automatic reading.
 
 The plugin reasserts its complete policy after resume, focus gain, UI entry,
 and relevant shell return. It sends end before suspend, exit, and terminal
 buffer entry. The terminal consumer remains responsible for reset,
 alternate-screen, PTY, and pane-local failsafes.
 
-While |vim.ui.select()| is active, lector.nvim sends protocol end so the
-terminal screen reader can read the provider's ordinary visual interface.
-Semantic policy is restored when the selection finishes. This includes the
-default selector used by LSP code actions and other multi-choice workflows.
+While |vim.ui.select()| or |vim.ui.input()| is active, lector.nvim sends
+protocol end so the terminal screen reader can read the provider's ordinary
+visual interface. Semantic policy is restored when the interaction finishes.
+This includes default and third-party providers, LSP code actions, and other
+multi-choice or input workflows.
 
 ==============================================================================
 6. Provider APIs                                    *lector-provider-api*

@@ -216,6 +216,20 @@ def main() -> int:
                     f"Lua mapping output had competing speech: {session.events!r}"
                 )
 
+            session.send(b":nnoremap Q <Cmd>echo 'Cmd mapping output'<CR>\r")
+            session.pump(0.2)
+            session.clear()
+            session.send(b"Q")
+            session.wait_for_output(b"Cmd mapping output")
+            session.pump(0.2)
+            if session.events != [
+                "set;auto=1;cursor=0",
+                "set;auto=0;cursor=0",
+            ]:
+                raise AssertionError(
+                    f"Cmd mapping output had competing speech: {session.events!r}"
+                )
+
             session.send(
                 b":lua vim.keymap.set('n','Q',function() "
                 b"vim.api.nvim_echo({{'first\\nsecond'}},false,{}) end)\r"
@@ -295,6 +309,66 @@ def main() -> int:
             if session.events != ["set;auto=1;cursor=0", "end"]:
                 raise AssertionError(
                     f"selector reclaimed semantic policy before closing: {session.events!r}"
+                )
+            session.clear()
+            session.send(b"\x1b")
+            session.wait_for_event("set;auto=0;cursor=0")
+            session.send(b":nunmap Q\r")
+
+            session.send(
+                b":lua vim.keymap.set('n','Q',function() "
+                b"local b=vim.api.nvim_create_buf(false,true); "
+                b"vim.api.nvim_buf_set_lines(b,0,-1,false,"
+                b"{'custom interactive UI','second row'}); "
+                b"local w=vim.api.nvim_open_win(b,true,"
+                b"{relative='editor',row=2,col=4,width=30,height=2,style='minimal'}); "
+                b"vim.keymap.set('n','q',function() "
+                b"vim.api.nvim_win_close(w,true) end,{buffer=b}) end)\r"
+            )
+            session.pump(0.2)
+            session.clear()
+            session.send(b"Q")
+            session.wait_for_output(b"custom interactive UI")
+            session.wait_for_event("end")
+            session.pump(0.2)
+            if session.events != ["set;auto=1;cursor=0", "end"]:
+                raise AssertionError(
+                    f"focused Lua UI did not restore screen-reader defaults: "
+                    f"{session.events!r}"
+                )
+            session.clear()
+            session.send(b"j")
+            session.pump(0.2)
+            if session.events:
+                raise AssertionError(
+                    f"focused Lua UI did not retain screen-reader ownership: "
+                    f"{session.events!r}"
+                )
+            session.clear()
+            session.send(b"q")
+            session.wait_for_event("set;auto=0;cursor=0")
+            session.pump(0.2)
+            if "set;auto=1;cursor=0" in session.events or "end" in session.events:
+                raise AssertionError(
+                    f"closing Lua UI briefly reclaimed output fallback: "
+                    f"{session.events!r}"
+                )
+            session.send(b":nunmap Q\r")
+
+            session.send(
+                b":lua vim.keymap.set('n','Q',function() "
+                b"vim.ui.input({prompt='Custom input: '},function() end) end)\r"
+            )
+            session.pump(0.2)
+            session.clear()
+            session.send(b"Q")
+            session.wait_for_output(b"Custom input:")
+            session.wait_for_event("end")
+            session.pump(0.2)
+            if session.events != ["set;auto=1;cursor=0", "end"]:
+                raise AssertionError(
+                    f"vim.ui.input did not retain screen-reader ownership: "
+                    f"{session.events!r}"
                 )
             session.clear()
             session.send(b"\x1b")
@@ -424,6 +498,10 @@ def main() -> int:
             session.send(b"v")
             session.wait_for_event("visual")
             session.pump(0.2)
+            if "set;auto=1;cursor=0" in session.events:
+                raise AssertionError(
+                    f"Visual entry enabled automatic reading: {session.events!r}"
+                )
             if "o" in session.events:
                 raise AssertionError(
                     f"Visual entry repeated the cursor character: {session.events!r}"
@@ -445,7 +523,7 @@ def main() -> int:
             session.send(b"u")
 
             session.send(b"GoThe quik fox meets zzzzword\x1b")
-            session.send(b":setlocal spell spelllang=en_us\r")
+            session.send(b":setlocal spell spelllang=en_us spellsuggest=best,5\r")
             session.send(b"0")
             session.send(b":nnoremap s ]s\r")
             session.clear()
@@ -458,6 +536,99 @@ def main() -> int:
             session.clear()
             session.send(b"[s")
             session.wait_for_event("quik")
+            session.clear()
+            session.send(b"z=")
+            session.wait_for_output(b'Change "quik" to:')
+            session.wait_for_event("set;auto=1;cursor=0")
+            session.pump(0.2)
+            if session.output.find(b"set;auto=1;cursor=0") > session.output.find(
+                b'Change "quik" to:'
+            ):
+                raise AssertionError("terminal reading started after suggestions rendered")
+            if session.events != ["set;auto=1;cursor=0"]:
+                raise AssertionError(
+                    f"spelling suggestions were not handed to terminal reading: "
+                    f"{session.events!r}"
+                )
+            session.send(b"q")
+            session.wait_for_event("set;auto=0;cursor=0")
+            session.pump(0.2)
+            if session.events != [
+                "set;auto=1;cursor=0",
+                "set;auto=0;cursor=0",
+            ]:
+                raise AssertionError(
+                    f"spelling suggestion prompt did not restore semantic reading: "
+                    f"{session.events!r}"
+                )
+
+            session.send(b":nnoremap Q z=\r")
+            session.clear()
+            session.send(b"Q")
+            session.wait_for_output(b'Change "quik" to:')
+            session.wait_for_event("set;auto=1;cursor=0")
+            if session.output.find(b"set;auto=1;cursor=0") > session.output.find(
+                b'Change "quik" to:'
+            ):
+                raise AssertionError(
+                    "terminal reading started after remapped suggestions rendered"
+                )
+            session.send(b"q")
+            session.wait_for_event("set;auto=0;cursor=0")
+
+            session.send(b":nunmap Q\r")
+            session.send(b":nnoremap <Plug>(LectorSpellSuggest) z=\r")
+            session.send(b":nmap Q <Plug>(LectorSpellSuggest)\r")
+            session.clear()
+            session.send(b"Q")
+            session.wait_for_output(b'Change "quik" to:')
+            session.wait_for_event("set;auto=1;cursor=0")
+            if session.output.find(b"set;auto=1;cursor=0") > session.output.find(
+                b'Change "quik" to:'
+            ):
+                raise AssertionError(
+                    "terminal reading started after <Plug> suggestions rendered"
+                )
+            session.send(b"q")
+            session.wait_for_event("set;auto=0;cursor=0")
+            session.send(b":nunmap Q\r")
+
+            session.clear()
+            session.send(b"[I")
+            session.wait_for_output(b"The quik fox meets zzzzword")
+            session.wait_for_event("set;auto=1;cursor=0")
+            session.pump(0.2)
+            if session.output.find(b"set;auto=1;cursor=0") > session.output.find(
+                b"The quik fox meets zzzzword"
+            ):
+                raise AssertionError("identifier-list reading started after output rendered")
+            if session.events != ["set;auto=1;cursor=0"]:
+                raise AssertionError(
+                    f"identifier list did not retain terminal reading: {session.events!r}"
+                )
+            session.send(b"q")
+            session.wait_for_event("set;auto=0;cursor=0")
+
+            session.clear()
+            session.send(b"g<")
+            session.wait_for_output(b"Press ENTER or type command to continue")
+            session.wait_for_event("set;auto=1;cursor=0")
+            session.pump(0.2)
+            if session.events != ["set;auto=1;cursor=0"]:
+                raise AssertionError(
+                    f"message scrollback did not retain terminal reading: {session.events!r}"
+                )
+            session.send(b"q")
+            session.wait_for_event("set;auto=0;cursor=0")
+
+            session.clear()
+            session.send(b"1z=")
+            session.pump(0.2)
+            if "set;auto=1;cursor=0" in session.events:
+                raise AssertionError(
+                    f"counted spelling replacement enabled automatic reading: "
+                    f"{session.events!r}"
+                )
             session.send(b":setlocal nospell\rdd")
 
             session.send(b"Goalpha beta gamma\x1b")

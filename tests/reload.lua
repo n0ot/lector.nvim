@@ -6,6 +6,7 @@ vim.opt.runtimepath:prepend(root)
 
 local original_ui_send = vim.api.nvim_ui_send
 local original_defer_fn = vim.defer_fn
+local original_ui_input = vim.ui.input
 local original_ui_select = vim.ui.select
 local sent = {}
 vim.api.nvim_ui_send = function(value)
@@ -15,6 +16,7 @@ end
 local function restore()
   vim.api.nvim_ui_send = original_ui_send
   vim.defer_fn = original_defer_fn
+  vim.ui.input = original_ui_input
   vim.ui.select = original_ui_select
 end
 
@@ -102,7 +104,9 @@ local first_options = vim.tbl_extend("force", {}, options, {
   announce_completions = true,
 })
 assert(first.setup(first_options))
+local first_ui_input = vim.ui.input
 local first_ui_select = vim.ui.select
+assert(first_ui_input ~= original_ui_input, "setup did not install the input handoff")
 assert(first_ui_select ~= original_ui_select, "setup did not install the selector handoff")
 vim.api.nvim_exec_autocmds("User", {
   pattern = "BlinkCmpMenuOpen",
@@ -114,6 +118,7 @@ package.loaded["lector"] = nil
 local second = require("lector")
 assert(first ~= second, "module reload returned the original instance")
 assert(second.setup(options))
+assert(vim.ui.input ~= first_ui_input, "module reload retained the stale input wrapper")
 assert(vim.ui.select ~= first_ui_select, "module reload retained the stale selector wrapper")
 assert(not first.health_info().enabled, "the replaced module instance remained enabled")
 for _, timer in ipairs(timers) do
@@ -184,8 +189,14 @@ vim.cmd("LectorAccessibilityEnable")
 assert(second.health_info().enabled, "the enable command did not target the active instance")
 
 local replacement_ui_select = function() end
+local replacement_ui_input = function() end
+vim.ui.input = replacement_ui_input
 vim.ui.select = replacement_ui_select
 vim.api.nvim_exec_autocmds("SafeState", { modeline = false })
+assert(
+  vim.ui.input ~= replacement_ui_input,
+  "SafeState did not wrap an input provider installed after setup"
+)
 assert(
   vim.ui.select ~= replacement_ui_select,
   "SafeState did not wrap a selector installed after setup"
@@ -193,6 +204,7 @@ assert(
 
 clear()
 second.teardown()
+equal(replacement_ui_input, vim.ui.input, "teardown restores the latest input provider")
 equal(replacement_ui_select, vim.ui.select, "teardown restores the latest selector provider")
 vim.wait(20)
 equal({}, speech(), "teardown cancels pending deferred announcements")
