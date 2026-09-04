@@ -31,6 +31,7 @@ local word_at = editor.word_at
 local word_at_or_after = editor.word_at_or_after
 local floating_window_scan_interval_ms = 50
 local floating_window_scan_duration_ms = 1000
+local floating_window_stable_scans = 2
 local group_name = "LectorApplicationAccessibility"
 local instance_registry = debug.getregistry()
 local instance_registry_key = "lector.nvim.active_instance"
@@ -55,6 +56,7 @@ local state = {
   windows = {},
   text_windows = {},
   known_windows = {},
+  floating_window_announcements = {},
   command_lines = {},
   command_line_active = false,
   command_line_level = 0,
@@ -1677,84 +1679,154 @@ local function attach_input_listener()
   end, state.input_namespace)
 end
 
-local ignored_floating_window_filetypes = {
-  ["blink-cmp-documentation"] = true,
-  ["blink-cmp-menu"] = true,
-  wk = true,
-}
-
-local function announce_floating_windows(windows)
-  local lifecycle_generation = state.lifecycle_generation
-  vim.schedule(function()
-    if not lifecycle_is_current(lifecycle_generation)
-      or not state.options.announce_floating_windows
-    then
-      return
+local function floating_decoration_text(decoration)
+  if type(decoration) == "string" then
+    return decoration
+  end
+  if type(decoration) ~= "table" then
+    return nil
+  end
+  local parts = {}
+  for _, chunk in ipairs(decoration) do
+    if type(chunk) == "string" then
+      table.insert(parts, chunk)
+    elseif type(chunk) == "table" and type(chunk[1]) == "string" then
+      table.insert(parts, chunk[1])
     end
-    if completion:is_blink_open() then
-      return
-    end
-    local readable = {}
-    for _, window in ipairs(windows) do
-      if vim.api.nvim_win_is_valid(window) and vim.api.nvim_get_current_win() ~= window then
-        local config = vim.api.nvim_win_get_config(window)
-        local buffer = vim.api.nvim_win_get_buf(window)
-        local filetype = vim.bo[buffer].filetype
-        if (config.relative ~= "" or config.external)
-          and vim.api.nvim_buf_is_valid(buffer)
-          and vim.bo[buffer].buftype ~= "terminal"
-          and not ignored_floating_window_filetypes[filetype]
-        then
-          local line_count = math.min(vim.api.nvim_buf_line_count(buffer), 200)
-          local lines = vim.api.nvim_buf_get_lines(buffer, 0, line_count, false)
-          table.insert(readable, {
-            column = tonumber(config.col) or 0,
-            row = tonumber(config.row) or 0,
-            text = table.concat(lines, "\n"),
-            window = window,
-            zindex = tonumber(config.zindex) or 50,
-          })
-        end
-      end
-    end
-    table.sort(readable, function(left, right)
-      if left.zindex ~= right.zindex then
-        return left.zindex < right.zindex
-      end
-      if left.row ~= right.row then
-        return left.row < right.row
-      end
-      if left.column ~= right.column then
-        return left.column < right.column
-      end
-      return left.window < right.window
-    end)
-    local contents = {}
-    for _, item in ipairs(readable) do
-      table.insert(contents, item.text)
-    end
-    M.say(table.concat(contents, "\n"))
-  end)
+  end
+  return table.concat(parts)
 end
 
-local function announce_new_floating_windows()
+local function floating_window_contents(window)
+  if not vim.api.nvim_win_is_valid(window)
+    or vim.api.nvim_get_current_win() == window
+  then
+    return nil
+  end
+  local ok_config, config = pcall(vim.api.nvim_win_get_config, window)
+  if not ok_config
+    or type(config) ~= "table"
+    or (config.relative == "" and not config.external)
+  then
+    return nil
+  end
+  local ok_buffer, buffer = pcall(vim.api.nvim_win_get_buf, window)
+  if not ok_buffer
+    or not vim.api.nvim_buf_is_valid(buffer)
+    or vim.bo[buffer].buftype == "terminal"
+  then
+    return nil
+  end
+  if completion:owns_floating_window(buffer) then
+    return nil, true
+  end
+
+  local line_count = math.min(vim.api.nvim_buf_line_count(buffer), 200)
+  local ok_lines, lines = pcall(
+    vim.api.nvim_buf_get_lines,
+    buffer,
+    0,
+    line_count,
+    false
+  )
+  if not ok_lines then
+    return nil
+  end
+  local parts = {}
+  local title = floating_decoration_text(config.title)
+  local contents = table.concat(lines, "\n")
+  local footer = floating_decoration_text(config.footer)
+  for _, part in ipairs({ title or "", contents, footer or "" }) do
+    if part ~= "" then
+      table.insert(parts, part)
+    end
+  end
+  local text = normalize_speech(table.concat(parts, "\n"))
+  if not text then
+    return nil
+  end
+  return {
+    column = tonumber(config.col) or 0,
+    row = tonumber(config.row) or 0,
+    signature = text,
+    text = text,
+    window = window,
+    zindex = tonumber(config.zindex) or 50,
+  }, false
+end
+
+local function discover_floating_windows()
   local current_windows = {}
-  local new_windows = {}
   for _, window in ipairs(vim.api.nvim_list_wins()) do
     current_windows[window] = true
     if not state.known_windows[window] then
       state.known_windows[window] = true
-      table.insert(new_windows, window)
+      local ok, config = pcall(vim.api.nvim_win_get_config, window)
+      if ok
+        and type(config) == "table"
+        and (config.relative ~= "" or config.external)
+      then
+        state.floating_window_announcements[window] = {
+          announced_signature = nil,
+          last_signature = nil,
+          stable_scans = 0,
+        }
+      end
     end
   end
   for window in pairs(state.known_windows) do
     if not current_windows[window] then
       state.known_windows[window] = nil
+      state.floating_window_announcements[window] = nil
       state.windows[window] = nil
     end
   end
-  if #new_windows > 0 then
-    announce_floating_windows(new_windows)
+end
+
+local function announce_stable_floating_windows()
+  if not state.options.announce_floating_windows then
+    return
+  end
+  local readable = {}
+  for window, observation in pairs(state.floating_window_announcements) do
+    if not observation.claimed then
+      local item, claimed = floating_window_contents(window)
+      if claimed then
+        observation.claimed = true
+      elseif item then
+        if item.signature == observation.last_signature then
+          observation.stable_scans = observation.stable_scans + 1
+        else
+          observation.last_signature = item.signature
+          observation.stable_scans = 1
+        end
+        if observation.stable_scans >= floating_window_stable_scans
+          and observation.announced_signature ~= item.signature
+        then
+          observation.announced_signature = item.signature
+          table.insert(readable, item)
+        end
+      end
+    end
+  end
+  table.sort(readable, function(left, right)
+    if left.zindex ~= right.zindex then
+      return left.zindex < right.zindex
+    end
+    if left.row ~= right.row then
+      return left.row < right.row
+    end
+    if left.column ~= right.column then
+      return left.column < right.column
+    end
+    return left.window < right.window
+  end)
+  local contents = {}
+  for _, item in ipairs(readable) do
+    table.insert(contents, item.text)
+  end
+  if #contents > 0 then
+    M.say(table.concat(contents, "\n"))
   end
 end
 
@@ -1771,7 +1843,8 @@ schedule_floating_window_scan = function()
     if not state.enabled or generation ~= state.window_scan_generation then
       return
     end
-    announce_new_floating_windows()
+    discover_floating_windows()
+    announce_stable_floating_windows()
     if checks_remaining <= 0 then
       return
     end
@@ -1787,6 +1860,7 @@ local function forget_window(event)
     return
   end
   state.known_windows[window] = nil
+  state.floating_window_announcements[window] = nil
   state.windows[window] = nil
   state.text_windows[window] = nil
   state.diagnostic_announcements[window] = nil
@@ -1841,6 +1915,7 @@ local function invalidate_deferred_work()
   state.automatic_reading = false
   state.discard_pending_messages = false
   state.message_poll_scheduled = false
+  state.floating_window_announcements = {}
   state.ui_transactions = {}
 end
 
@@ -1864,6 +1939,7 @@ function M.setup(options)
   state.windows = {}
   state.text_windows = {}
   state.known_windows = {}
+  state.floating_window_announcements = {}
   for _, window in ipairs(vim.api.nvim_list_wins()) do
     state.known_windows[window] = true
   end
@@ -1911,7 +1987,7 @@ function M.setup(options)
   end)
   create_autocmd("BufLeave", prepare_to_leave_terminal)
   create_autocmd({ "BufEnter", "WinEnter" }, schedule_buffer_announcement)
-  create_autocmd("WinNew", announce_new_floating_windows)
+  create_autocmd("WinNew", schedule_floating_window_scan)
   create_autocmd("WinClosed", forget_window)
   create_autocmd({ "CursorMoved", "CursorMovedI" }, function(event)
     schedule_cursor_announcement(event.event)
@@ -2042,6 +2118,7 @@ function M.setup(options)
   create_autocmd("SafeState", function()
     ensure_ui_functions()
     schedule_message_poll()
+    schedule_floating_window_scan()
   end)
 
   install_ui_functions()

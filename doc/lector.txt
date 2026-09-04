@@ -115,9 +115,10 @@ announce_messages
         terminal reading.
 
 announce_floating_windows
-        Announce newly displayed informational floating windows. Provider UI
-        layouts already handled semantically, including Blink and which-key
-        windows, are not flattened into speech.
+        Announce unclaimed non-focused floating windows after their title and
+        contents stabilize. This includes custom Lua and which-key windows.
+        Provider windows already owned by a semantic adapter, such as Blink
+        completion, are not repeated.
 
 announce_command_line
         Announce command-line type, movement, history, and completion.
@@ -205,8 +206,10 @@ Replace, Visual, Select, and semantic command-line editing. A focused floating
 UI, a prompt buffer, a terminal job, an external command, or an unknown future
 mode instead receives the screen reader's complete ordinary policy, including
 cursor tracking. Policy is reclaimed when focus returns to an owned editor
-context. Newly displayed informational, non-focused floating windows continue
-to be announced semantically.
+context. Newly displayed, non-focused floating windows are tracked by window
+identity and content. Unclaimed windows are announced semantically after their
+title and buffer text stabilize; later content changes are deduplicated and
+announced once. Windows claimed by another semantic adapter are skipped.
 
 Native Normal- and Visual-mode commands which directly render output are
 recognized before that output appears. These include |[i|, |[I|, |[d|, |[D|

@@ -72,8 +72,10 @@ lookup, hit-enter output, and pagers enables automatic reading before it
 renders while leaving cursor tracking suppressed. Focused floating UIs,
 prompt buffers, `vim.ui.select()`, `vim.ui.input()`, terminal jobs, and unknown
 future modes instead restore the screen reader's complete ordinary policy.
-Informational non-focused floats are announced semantically. Ordinary
-movement, editing, and entry into Visual mode never enable automatic reading.
+Unclaimed non-focused floats are announced semantically after their contents
+stabilize, including custom Lua and which-key interfaces; floats owned by
+completion adapters are not repeated. Ordinary movement, editing, and entry
+into Visual mode never enable automatic reading.
 
 See [`:help lector.nvim`](doc/lector.txt) for the complete behavior and option
 reference.

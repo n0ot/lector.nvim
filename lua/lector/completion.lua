@@ -7,6 +7,10 @@ Completion.__index = Completion
 local native_menu_id = "neovim-insert-completion"
 local command_line_menu_id = "neovim-command-line-completion"
 local blink_menu_id = "blink-completion"
+local blink_floating_window_filetypes = {
+  ["blink-cmp-documentation"] = true,
+  ["blink-cmp-menu"] = true,
+}
 
 local function native_item_label(item)
   if type(item) ~= "table" then
@@ -72,6 +76,16 @@ end
 
 function Completion:is_blink_open()
   return self.blink_menu_open
+end
+
+function Completion:owns_floating_window(buffer)
+  if not vim.api.nvim_buf_is_valid(buffer) then
+    return false
+  end
+  local ok, filetype = pcall(vim.api.nvim_get_option_value, "filetype", {
+    buf = buffer,
+  })
+  return ok and blink_floating_window_filetypes[filetype] or false
 end
 
 function Completion:invalidate()

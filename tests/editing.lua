@@ -570,9 +570,6 @@ equal(
 clear()
 local which_key_buffer = vim.api.nvim_create_buf(false, true)
 vim.bo[which_key_buffer].filetype = "wk"
-vim.api.nvim_buf_set_lines(which_key_buffer, 0, -1, false, {
-  "icons mappings flattened visual layout",
-})
 local which_key_window = vim.api.nvim_open_win(which_key_buffer, false, {
   relative = "editor",
   row = 2,
@@ -580,10 +577,58 @@ local which_key_window = vim.api.nvim_open_win(which_key_buffer, false, {
   width = 40,
   height = 1,
   style = "minimal",
+  border = "single",
+  title = { { "Spelling Suggestions", "FloatTitle" } },
 })
-vim.wait(100)
-equal({}, speech(), "which-key's visual layout is not flattened into speech")
+vim.defer_fn(function()
+  if vim.api.nvim_buf_is_valid(which_key_buffer) then
+    vim.api.nvim_buf_set_lines(which_key_buffer, 0, -1, false, {
+      "1 -> test    2 -> tests",
+    })
+  end
+end, 20)
+assert(
+  vim.wait(500, function() return #speech() > 0 end),
+  "delayed custom floating window announcement timed out"
+)
+equal(
+  { "Spelling Suggestions 1 -> test 2 -> tests" },
+  speech(),
+  "unclaimed provider floats are announced after their contents stabilize"
+)
+
+clear()
+vim.api.nvim_buf_set_lines(which_key_buffer, 0, -1, false, {
+  "1 -> testing    2 -> tested",
+})
+assert(
+  vim.wait(500, function() return #speech() > 0 end),
+  "updated custom floating window announcement timed out"
+)
+equal(
+  { "Spelling Suggestions 1 -> testing 2 -> tested" },
+  speech(),
+  "changed provider float contents are announced once after stabilizing"
+)
 vim.api.nvim_win_close(which_key_window, true)
+
+clear()
+local blink_buffer = vim.api.nvim_create_buf(false, true)
+vim.bo[blink_buffer].filetype = "blink-cmp-menu"
+vim.api.nvim_buf_set_lines(blink_buffer, 0, -1, false, {
+  "completion already announced by its semantic adapter",
+})
+local blink_window = vim.api.nvim_open_win(blink_buffer, false, {
+  relative = "editor",
+  row = 2,
+  col = 1,
+  width = 50,
+  height = 1,
+  style = "minimal",
+})
+vim.wait(150)
+equal({}, speech(), "semantically claimed provider floats are not repeated")
+vim.api.nvim_win_close(blink_window, true)
 lector.teardown()
 restore()
 print("lector.nvim editing tests passed")
