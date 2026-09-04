@@ -6,7 +6,9 @@ vim.opt.runtimepath:prepend(root)
 
 local original_ui_send = vim.api.nvim_ui_send
 local original_on_key = vim.on_key
+local original_ui_select = vim.ui.select
 local input_listener
+local pending_ui_select
 local sent = {}
 
 vim.api.nvim_ui_send = function(value)
@@ -15,10 +17,18 @@ end
 vim.on_key = function(callback)
   input_listener = callback
 end
+vim.ui.select = function(items, options, callback)
+  pending_ui_select = {
+    items = items,
+    options = options,
+    callback = callback,
+  }
+end
 
 local function restore()
   vim.api.nvim_ui_send = original_ui_send
   vim.on_key = original_on_key
+  vim.ui.select = original_ui_select
 end
 
 local function fail(message)
@@ -291,10 +301,38 @@ vim.o.spellsuggest = "best,5"
 vim.api.nvim_win_set_cursor(0, { 1, 4 })
 local suggestions = vim.fn.spellsuggest("quik", 5, false)
 local expected_suggestions = { "Change quik to" }
+local spelling_items = {}
 for index, suggestion in ipairs(suggestions) do
   table.insert(expected_suggestions, index .. ", " .. suggestion)
+  table.insert(spelling_items, { word = suggestion })
 end
 table.insert(expected_suggestions, "Type a number and Enter, or q to cancel")
+clear()
+input_listener("z", "z")
+input_listener("=", "=")
+pending_ui_select = nil
+vim.ui.select(spelling_items, {
+  prompt = 'Change "quik" to:',
+  kind = "spell",
+  format_item = function(item) return item.word end,
+}, function() end)
+equal(
+  { table.concat(expected_suggestions, ". ") },
+  speech(),
+  "a spelling selector reuses the announcement made before z= opens"
+)
+assert(pending_ui_select, "the spelling selector did not reach its UI provider")
+assert(lector.health_info().active, "a semantic spelling selector yielded terminal ownership")
+for _, value in ipairs(sent) do
+  if value:find("set;auto=1;cursor=0", 1, true)
+    or value:find(";end\27\\", 1, true)
+  then
+    fail("a semantic spelling selector yielded terminal reading")
+  end
+end
+pending_ui_select.callback(nil, nil)
+vim.wait(10)
+
 clear()
 input_listener("z", "z")
 input_listener("=", "=")
@@ -324,6 +362,23 @@ equal(
   speech(),
   "closing the native suggestion prompt does not repeat its contents"
 )
+
+clear()
+pending_ui_select = nil
+vim.ui.select({ { word = "test" }, { word = "tests" } }, {
+  prompt = 'Change "tesst" to:',
+  kind = "spell",
+  format_item = function(item) return item.word end,
+}, function() end)
+equal(
+  { "Change tesst to. 1, test. 2, tests. Choose an item, or cancel" },
+  speech(),
+  "spell UI metadata is sufficient without observing a mapping"
+)
+assert(pending_ui_select, "the direct spelling selector did not reach its UI provider")
+assert(lector.health_info().active, "a direct spelling selector yielded terminal ownership")
+pending_ui_select.callback(nil, nil)
+vim.wait(10)
 vim.o.spellsuggest = original_spellsuggest
 vim.wo.spell = false
 

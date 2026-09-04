@@ -88,6 +88,7 @@ local state = {
   ui_originals = {},
   ui_wrappers = {},
   ui_transactions = {},
+  semantic_ui_transactions = {},
 }
 
 local defaults = {
@@ -328,6 +329,8 @@ local ui_callback_positions = {
   select = 3,
 }
 
+local begin_semantic_ui_transaction
+
 local function restore_ui_function(name)
   local wrapper = state.ui_wrappers[name]
   if wrapper and vim.ui and vim.ui[name] == wrapper then
@@ -353,6 +356,22 @@ local function finish_ui_transaction(transaction)
   end
 end
 
+local function finish_semantic_ui_transaction(transaction)
+  if not state.semantic_ui_transactions[transaction] then
+    return
+  end
+  state.semantic_ui_transactions[transaction] = nil
+  if next(state.semantic_ui_transactions) or not state.enabled then
+    return
+  end
+  local lifecycle_generation = state.lifecycle_generation
+  vim.schedule(function()
+    if lifecycle_is_current(lifecycle_generation) then
+      M.activate()
+    end
+  end)
+end
+
 local function install_ui_function(name, callback_position)
   restore_ui_function(name)
   if not vim.ui or type(vim.ui[name]) ~= "function" then
@@ -364,6 +383,32 @@ local function install_ui_function(name, callback_position)
     local callback = arguments[callback_position]
     if not state.enabled or type(callback) ~= "function" then
       return original(unpack_values(arguments, 1, arguments.n))
+    end
+
+    local semantic_transaction = begin_semantic_ui_transaction
+      and begin_semantic_ui_transaction(name, arguments)
+      or nil
+    if semantic_transaction then
+      local completed = false
+      arguments[callback_position] = function(...)
+        if not completed then
+          completed = true
+          finish_semantic_ui_transaction(semantic_transaction)
+        end
+        return callback(...)
+      end
+      local results = pack_values(pcall(
+        original,
+        unpack_values(arguments, 1, arguments.n)
+      ))
+      if not results[1] then
+        if not completed then
+          completed = true
+          finish_semantic_ui_transaction(semantic_transaction)
+        end
+        error(results[2], 0)
+      end
+      return unpack_values(results, 2, results.n)
     end
 
     local transaction = {}
@@ -595,6 +640,61 @@ local function announce_spelling_suggestions(mode)
   end
   table.insert(parts, "Type a number and Enter, or q to cancel")
   return M.say(table.concat(parts, ". "))
+end
+
+local function spelling_select_announcement(items, options)
+  if type(items) ~= "table" or type(options) ~= "table" then
+    return nil
+  end
+  local prompt = normalize_speech(options.prompt) or "Spelling suggestions"
+  local word = prompt:match('^Change%s+"(.-)"%s+to:?$')
+  if word then
+    prompt = "Change " .. word .. " to"
+  else
+    prompt = prompt:gsub(":$", "")
+  end
+  local parts = { prompt }
+  for index, item in ipairs(items) do
+    local label = type(item) == "table" and item.word or nil
+    if not label and type(options.format_item) == "function" then
+      local ok, formatted = pcall(options.format_item, item)
+      label = ok and formatted or nil
+    end
+    if not label and type(item) ~= "table" then
+      label = tostring(item)
+    end
+    label = normalize_speech(label)
+    if label then
+      table.insert(parts, index .. ", " .. label)
+    end
+  end
+  if #parts == 1 then
+    return nil
+  end
+  table.insert(parts, "Choose an item, or cancel")
+  return table.concat(parts, ". ")
+end
+
+begin_semantic_ui_transaction = function(name, arguments)
+  local options = arguments[2]
+  if name ~= "select"
+    or not state.options.announce_spelling
+    or type(options) ~= "table"
+    or options.kind ~= "spell"
+  then
+    return nil
+  end
+
+  if not state.semantic_native_prompt then
+    local announcement = spelling_select_announcement(arguments[1], options)
+    if not announcement or not M.say(announcement) then
+      return nil
+    end
+  end
+  state.semantic_native_prompt = false
+  local transaction = {}
+  state.semantic_ui_transactions[transaction] = true
+  return transaction
 end
 
 transient_output = transient_output_module.new({
@@ -1124,7 +1224,8 @@ local function announce_mode(event)
     state.suppress_prompt_mode_return = nil
     return
   end
-  local command_output_owns_transition = state.command_output_fallback
+  local command_output_owns_transition = (state.command_output_fallback
+      or next(state.semantic_ui_transactions) ~= nil)
     and (mode_kind == "r"
       or mode_kind == "!"
       or (mode_kind == "c" and native_text_prompt_active())
@@ -1302,6 +1403,10 @@ local function announce_command_line(event)
   remember_command_line(level)
   local command_type = event and (event.match or (event.data and event.data.cmdtype))
   command_type = command_type or vim.fn.getcmdtype()
+  if next(state.semantic_ui_transactions) ~= nil then
+    M.activate()
+    return
+  end
   -- A semantically announced native prompt remains owned while the user
   -- chooses an item. Other native text prompts retain the terminal-reading
   -- fallback used for their visible output.
@@ -1579,9 +1684,14 @@ local function attach_input_listener()
 
   local function restore_command_output_fallback()
     local fallback_active = state.command_output_fallback
+    local semantic_ui_active = next(state.semantic_ui_transactions) ~= nil
     local ok, current_mode = pcall(vim.api.nvim_get_mode)
     local mode = ok and current_mode and current_mode.mode or ""
     local closes_prompt = mode == "r" or mode == "r?"
+    if closes_prompt and semantic_ui_active then
+      suppress_prompt_return()
+      return true
+    end
     if closes_prompt then
       if fallback_active then
         state.discard_pending_messages = true
@@ -1917,6 +2027,7 @@ local function invalidate_deferred_work()
   state.message_poll_scheduled = false
   state.floating_window_announcements = {}
   state.ui_transactions = {}
+  state.semantic_ui_transactions = {}
 end
 
 function M.setup(options)
@@ -1969,6 +2080,7 @@ function M.setup(options)
   state.message_poll_scheduled = false
   state.message_history = read_message_history()
   state.ui_transactions = {}
+  state.semantic_ui_transactions = {}
   state.buffer_announcement_generation = state.buffer_announcement_generation + 1
   state.cursor_announcement_generation = state.cursor_announcement_generation + 1
 

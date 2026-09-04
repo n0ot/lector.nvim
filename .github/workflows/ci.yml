@@ -9,12 +9,19 @@ permissions:
 
 jobs:
   test:
+    name: test (${{ matrix.label }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        neovim: [stable, nightly]
+        include:
+          - neovim: v0.12.0
+            label: 0.12.0 minimum
+          - neovim: v0.12.5
+            label: 0.12.5
+          - neovim: nightly
+            label: 0.13 nightly
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

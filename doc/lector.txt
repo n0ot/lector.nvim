@@ -227,7 +227,9 @@ While |vim.ui.select()| or |vim.ui.input()| is active, lector.nvim sends
 protocol end so the terminal screen reader can read the provider's ordinary
 visual interface. Semantic policy is restored when the interaction finishes.
 This includes default and third-party providers, LSP code actions, and other
-multi-choice or input workflows.
+multi-choice or input workflows. A selector whose options identify
+`kind = "spell"` is claimed semantically when |announce_spelling| is enabled,
+so Neovim 0.13's |z=| implementation does not cause a duplicate handoff.
 
 ==============================================================================
 6. Provider APIs                                    *lector-provider-api*

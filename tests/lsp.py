@@ -90,24 +90,33 @@ def main() -> int:
 
             session.clear()
             session.send(b":lua vim.lsp.buf.definition()\r")
-            session.wait_for_event(
-                "LSP locations, print(value), lector-lsp-pty.lua, "
-                "line 2, column 1, 1 of 1"
+            wait_for_event_containing(session, "print(value)")
+            definition_list_suffix = (
+                "print(value), lector-lsp-pty.lua, line 2, column 1, 1 of 1"
             )
+            if not any(
+                event == "print(value)" or definition_list_suffix in event
+                for event in session.events
+            ):
+                raise AssertionError(
+                    "definition did not announce its destination; "
+                    f"events={session.events!r}"
+                )
 
             session.send(b"gg")
             session.pump(0.2)
             session.clear()
             session.send(b":lua vim.lsp.buf.references()\r")
-            session.wait_for_event(
-                "References, local value = missing, lector-lsp-pty.lua, "
-                "line 1, column 7, 1 of 2"
+            wait_for_event_containing(
+                session,
+                "local value = missing, lector-lsp-pty.lua, "
+                "line 1, column 7, 1 of 2",
             )
             session.clear()
             session.send(b"j")
-            session.wait_for_event(
-                "References, print(value), lector-lsp-pty.lua, "
-                "line 2, column 7, 2 of 2"
+            wait_for_event_containing(
+                session,
+                "print(value), lector-lsp-pty.lua, line 2, column 7, 2 of 2",
             )
         finally:
             session.close()

@@ -21,6 +21,11 @@ APC = re.compile(
     rb"\x1b_Lector;A11y;1;(?:say;([0-9a-f]+)|line;indent=\d+;([0-9a-f]+)|"
     rb"(set;auto=[01];cursor=[01]|end))\x1b\\"
 )
+NVIM = os.environ.get("LECTOR_NVIM", "nvim")
+TERMINAL_QUERY_RESPONSES = (
+    (b"\x1b[5n", b"\x1b[0n"),  # terminal status: operating normally
+)
+MAX_TERMINAL_QUERY_LENGTH = max(len(query) for query, _ in TERMINAL_QUERY_RESPONSES)
 
 
 class Nvim:
@@ -46,7 +51,7 @@ class Nvim:
         )
         self.process = subprocess.Popen(
             [
-                "nvim",
+                NVIM,
                 "--clean",
                 "-n",
                 "-i",
@@ -70,6 +75,7 @@ class Nvim:
         self.output = bytearray()
         self.events: list[str] = []
         self._parsed = 0
+        self._terminal_query_tail = b""
 
     def pump(self, seconds: float = 0.05) -> None:
         deadline = time.monotonic() + seconds
@@ -89,6 +95,18 @@ class Nvim:
             if not chunk:
                 break
             self.output.extend(chunk)
+            query_data = self._terminal_query_tail + chunk
+            old_tail_length = len(self._terminal_query_tail)
+            for query, response in TERMINAL_QUERY_RESPONSES:
+                start = 0
+                while True:
+                    position = query_data.find(query, start)
+                    if position < 0:
+                        break
+                    if position + len(query) > old_tail_length:
+                        os.write(self.master, response)
+                    start = position + len(query)
+            self._terminal_query_tail = query_data[-(MAX_TERMINAL_QUERY_LENGTH - 1):]
         self._parse_events()
 
     def _parse_events(self) -> None:
@@ -152,7 +170,7 @@ class Nvim:
 
 
 def main() -> int:
-    if not shutil.which("nvim"):
+    if not shutil.which(NVIM):
         print("skipped: nvim is not installed")
         return 0
 
@@ -563,7 +581,11 @@ def main() -> int:
                 b'Change "quik" to:'
             ):
                 raise AssertionError("terminal reading started after suggestions rendered")
-            if session.events != ["set;auto=1;cursor=0"]:
+            valid_spelling_handoffs = (
+                ["set;auto=1;cursor=0"],
+                ["set;auto=1;cursor=0", "end"],
+            )
+            if session.events not in valid_spelling_handoffs:
                 raise AssertionError(
                     f"spelling suggestions were not handed to terminal reading: "
                     f"{session.events!r}"
@@ -571,10 +593,11 @@ def main() -> int:
             session.send(b"q")
             session.wait_for_event("set;auto=0;cursor=0")
             session.pump(0.2)
-            if session.events != [
-                "set;auto=1;cursor=0",
-                "set;auto=0;cursor=0",
-            ]:
+            valid_spelling_lifecycles = (
+                ["set;auto=1;cursor=0", "set;auto=0;cursor=0"],
+                ["set;auto=1;cursor=0", "end", "set;auto=0;cursor=0"],
+            )
+            if session.events not in valid_spelling_lifecycles:
                 raise AssertionError(
                     f"spelling suggestion prompt did not restore semantic reading: "
                     f"{session.events!r}"
@@ -775,9 +798,12 @@ def main() -> int:
             spelling_session.wait_for_output(b'Change "tesst" to:')
             spelling_session.wait_for_event_prefix("Change tesst to. 1, test")
             spelling_session.pump(0.2)
-            if "set;auto=1;cursor=0" in spelling_session.events:
+            if any(
+                event in {"set;auto=1;cursor=0", "end"}
+                for event in spelling_session.events
+            ):
                 raise AssertionError(
-                    "semantic spelling suggestions enabled terminal automatic "
+                    "semantic spelling suggestions yielded terminal "
                     f"reading: {spelling_session.events!r}"
                 )
             spelling_session.send(b"q")
@@ -787,9 +813,12 @@ def main() -> int:
             spelling_session.send(b"Q")
             spelling_session.wait_for_output(b'Change "tesst" to:')
             spelling_session.wait_for_event_prefix("Change tesst to. 1, test")
-            if "set;auto=1;cursor=0" in spelling_session.events:
+            if any(
+                event in {"set;auto=1;cursor=0", "end"}
+                for event in spelling_session.events
+            ):
                 raise AssertionError(
-                    "mapped semantic spelling suggestions enabled terminal "
+                    "mapped semantic spelling suggestions yielded terminal "
                     f"automatic reading: {spelling_session.events!r}"
                 )
             spelling_session.send(b"q")

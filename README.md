@@ -158,7 +158,9 @@ returns.
 The plugin yields its complete policy while `vim.ui.select()` or
 `vim.ui.input()` is active. This keeps default and third-party providers—and
 LSP workflows such as code actions which use them—readable without replacing
-their visual UI.
+their visual UI. A selector carrying Neovim's `kind = "spell"` metadata is the
+exception when spelling announcements are enabled: Lector announces its
+choices semantically and avoids handing off the same interface a second time.
 
 ## Testing
 
@@ -167,6 +169,9 @@ Run every headless and real-TUI test with:
 ```sh
 ./scripts/test
 ```
+
+Set `LECTOR_NVIM` to an executable path to exercise a specific Neovim build.
+CI covers Neovim 0.12.0, 0.12.5, and 0.13 nightly.
 
 The real-TUI tests use only Python's standard library and exercise Neovim
 through a PTY, including a deterministic LSP server, the blocking native
