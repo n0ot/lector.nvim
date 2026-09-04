@@ -65,14 +65,15 @@ replace the previous callbacks, deferred work, commands, and autocmds.
 
 Lector suppresses terminal heuristics only while it owns a predictable editor
 context: Normal, operator-pending, Insert, Replace, Visual, Select, and
-semantic command-line editing. Native output such as `z=`, `[I`, `g<`, tag
-selection, keyword lookup, hit-enter output, and pagers enables automatic
-reading before it renders while leaving cursor tracking suppressed. Focused
-floating UIs, prompt buffers, `vim.ui.select()`, `vim.ui.input()`, terminal
-jobs, and unknown future modes instead restore the screen reader's complete
-ordinary policy. Informational non-focused floats are announced semantically.
-Ordinary movement, editing, and entry into Visual mode never enable automatic
-reading.
+semantic command-line editing. The native `z=` menu remains visible, while
+its spelling suggestions are announced deterministically from Neovim's own
+suggestion API. Other native output such as `[I`, `g<`, tag selection, keyword
+lookup, hit-enter output, and pagers enables automatic reading before it
+renders while leaving cursor tracking suppressed. Focused floating UIs,
+prompt buffers, `vim.ui.select()`, `vim.ui.input()`, terminal jobs, and unknown
+future modes instead restore the screen reader's complete ordinary policy.
+Informational non-focused floats are announced semantically. Ordinary
+movement, editing, and entry into Visual mode never enable automatic reading.
 
 See [`:help lector.nvim`](doc/lector.txt) for the complete behavior and option
 reference.
@@ -139,7 +140,9 @@ end)
 `observe_search()` wraps provider-owned search navigation so match position
 is announced from Neovim's resulting search state. Successful cursor and text
 changes otherwise come directly from Neovim events and before/after state;
-lector.nvim does not interpret normal-mode keys or mapping expansions.
+lector.nvim does not infer cursor or edit semantics from normal-mode keys or
+mapping expansions. A small native-output recognizer observes resolved input
+so commands such as a remapped `z=` can be prepared before they draw.
 A command line which remains open beyond its input transaction is announced
 as interactive editor state. One which enters and leaves within the same
 transaction is treated as an implementation detail. Opaque Lua mapping

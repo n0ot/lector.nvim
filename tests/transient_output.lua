@@ -6,8 +6,12 @@ vim.opt.runtimepath:prepend(root)
 
 local output = require("lector.transient_output")
 local started = 0
+local commands = {}
 local observer = output.new({
-  begin_output = function() started = started + 1 end,
+  begin_output = function(command)
+    started = started + 1
+    table.insert(commands, command)
+  end,
 })
 
 local function equal(expected, actual, context)
@@ -39,6 +43,7 @@ for _, command in ipairs({
   local before = started
   assert(sequence(command), command .. " was not recognized as native output")
   equal(before + 1, started, command .. " starts one output handoff")
+  equal(command, commands[#commands], command .. " identifies its output interface")
 end
 
 observer:reset()

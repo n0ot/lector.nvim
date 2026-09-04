@@ -75,7 +75,7 @@ function M:observe_key(key, mode, count)
       if prefix == "z" and key == "=" and (tonumber(count) or 0) ~= 0 then
         return false
       end
-      self.begin_output()
+      self.begin_output(prefix .. key, mode, count)
       return true
     end
     return false
@@ -88,7 +88,7 @@ function M:observe_key(key, mode, count)
 
   local normal_mode = mode:sub(1, 1) == "n"
   if direct_commands[key] or (normal_mode and normal_only_commands[key]) then
-    self.begin_output()
+    self.begin_output(key, mode, count)
     return true
   end
   return false

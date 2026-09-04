@@ -285,6 +285,46 @@ vim.api.nvim_win_set_cursor(0, { 1, 5 })
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
 vim.wait(10)
 equal({ "u" }, speech(), "movement within the same misspelling does not repeat its status")
+
+local original_spellsuggest = vim.o.spellsuggest
+vim.o.spellsuggest = "best,5"
+vim.api.nvim_win_set_cursor(0, { 1, 4 })
+local suggestions = vim.fn.spellsuggest("quik", 5, false)
+local expected_suggestions = { "Change quik to" }
+for index, suggestion in ipairs(suggestions) do
+  table.insert(expected_suggestions, index .. ", " .. suggestion)
+end
+table.insert(expected_suggestions, "Type a number and Enter, or q to cancel")
+clear()
+input_listener("z", "z")
+input_listener("=", "=")
+vim.api.nvim_exec_autocmds("CmdlineEnter", {
+  pattern = "-",
+  data = { cmdlevel = 1, cmdtype = "-" },
+  modeline = false,
+})
+equal(
+  { table.concat(expected_suggestions, ". ") },
+  speech(),
+  "z= announces Neovim's own spelling suggestions semantically"
+)
+for _, value in ipairs(sent) do
+  if value:find("set;auto=1;cursor=0", 1, true) then
+    fail("a semantically announced z= prompt enabled terminal automatic reading")
+  end
+end
+vim.api.nvim_exec_autocmds("CmdlineLeave", {
+  pattern = "-",
+  data = { abort = true, cmdlevel = 1, cmdtype = "-" },
+  modeline = false,
+})
+vim.wait(10)
+equal(
+  { table.concat(expected_suggestions, ". ") },
+  speech(),
+  "closing the native suggestion prompt does not repeat its contents"
+)
+vim.o.spellsuggest = original_spellsuggest
 vim.wo.spell = false
 
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { "first", "second" })

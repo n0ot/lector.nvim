@@ -112,7 +112,7 @@ announce_modes
 
 announce_messages
         Announce recorded messages and yield transient output to ordinary
-        terminal reading, including the native |z=| spelling-suggestion list.
+        terminal reading.
 
 announce_floating_windows
         Announce newly displayed informational floating windows. Provider UI
@@ -143,7 +143,9 @@ announce_recording
         Announce macro recording start and stop.
 
 announce_spelling
-        Announce misspelled, rare, regional, and capitalization results.
+        Announce misspelled, rare, regional, and capitalization results, plus
+        the numbered suggestions shown by the native |z=| interface. The
+        visual interface is not replaced.
 
 announce_completions
         Announce native and registered completion menu selection.
@@ -168,9 +170,11 @@ Operator edit destinations use |TextYankPost|, including its Visual and
 register-type metadata. Put announcements use |TextPutPost| when available and
 a change-verified edit fallback otherwise. |vim.on_key()| captures only the
 state before an input is processed; literal normal-mode keys and mapping
-expansions have no semantic meaning to lector.nvim. Fold, search, quickfix,
-recording, spelling, diagnostic, command-line, message, and window state come
-from documented Neovim APIs and events.
+expansions do not determine cursor or edit semantics. A small native-output
+recognizer observes resolved input only to prepare interfaces which draw
+before a useful event is available. Fold, search, quickfix, recording,
+spelling, diagnostic, command-line, message, and window state come from
+documented Neovim APIs and events.
 
 A command line which remains open beyond its input transaction is announced
 as interactive editor state. One which enters and leaves within the same
@@ -190,6 +194,12 @@ interfaces such as pagers and hit-enter prompts enable automatic reading but
 keep cursor tracking suppressed because their terminal cursor is a rendering
 detail. Visual presentation is not reconstructed or removed.
 
+The native |z=| spelling interface is the exception: its visible list remains
+unchanged, and the same suggestions are obtained from |spellsuggest()| and
+announced semantically before the interface opens. This avoids depending on a
+terminal redraw heuristic for a blocking prompt. If `announce_spelling` is
+disabled, |z=| uses the ordinary transient-output handoff instead.
+
 Lector owns predictable editor contexts: Normal, operator-pending, Insert,
 Replace, Visual, Select, and semantic command-line editing. A focused floating
 UI, a prompt buffer, a terminal job, an external command, or an unknown future
@@ -199,10 +209,11 @@ context. Newly displayed informational, non-focused floating windows continue
 to be announced semantically.
 
 Native Normal- and Visual-mode commands which directly render output are
-recognized before that output appears. These include |z=|, |[i|, |[I|, |[d|,
-|[D| and their `]` counterparts, |g<|, |g]|, character information, tag
-selection, and keyword lookup. Entering Visual mode and ordinary editor
-navigation never enable automatic reading.
+recognized before that output appears. These include |[i|, |[I|, |[d|, |[D|
+and their `]` counterparts, |g<|, |g]|, character information, tag selection,
+and keyword lookup. |z=| is recognized through the same mapping-safe input
+path but announces its suggestions semantically. Entering Visual mode and
+ordinary editor navigation never enable automatic reading.
 
 The plugin reasserts its complete policy after resume, focus gain, UI entry,
 and relevant shell return. It sends end before suspend, exit, and terminal

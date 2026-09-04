@@ -66,6 +66,7 @@ local state = {
   terminal_fallback = false,
   terminal_command_line = false,
   command_output_fallback = false,
+  semantic_native_prompt = false,
   discard_pending_messages = false,
   suppress_prompt_mode_return = nil,
   last_spelling = nil,
@@ -238,10 +239,6 @@ local function native_text_prompt_active()
   local ok, command_type = pcall(vim.fn.getcmdtype)
   return ok and command_type == "-"
 end
-
-transient_output = transient_output_module.new({
-  begin_output = begin_automatic_output_fallback,
-})
 
 function M.say(text)
   if not M.activate() then
@@ -514,6 +511,108 @@ local function announce_spelling(current, spelling)
   send_speech((labels[spelling.kind] or "spelling") .. ", " .. spelling.word)
   return true
 end
+
+local function spelling_suggestion_limit()
+  local limit = math.max(1, (tonumber(vim.o.lines) or 3) - 2)
+  local ok, option = pcall(vim.api.nvim_get_option_value, "spellsuggest", {})
+  if not ok or type(option) ~= "string" then
+    return limit
+  end
+  for item in option:gmatch("[^,]+") do
+    local configured = tonumber(item)
+    if configured then
+      limit = math.min(limit, math.max(1, math.floor(configured)))
+      break
+    end
+  end
+  return limit
+end
+
+local function visual_spelling_text(mode)
+  local kind = type(mode) == "string" and mode:sub(1, 1) or ""
+  if kind ~= "v"
+    and kind ~= "V"
+    and kind ~= "s"
+    and kind ~= "S"
+    and kind ~= "\22"
+    and kind ~= "\19"
+  then
+    return nil
+  end
+  local ok, region = pcall(
+    vim.fn.getregion,
+    vim.fn.getpos("v"),
+    vim.fn.getpos("."),
+    { type = kind }
+  )
+  if not ok or type(region) ~= "table" or #region == 0 then
+    return nil
+  end
+  return table.concat(region, "\n")
+end
+
+local function announce_spelling_suggestions(mode)
+  if not state.options.announce_spelling then
+    return false
+  end
+  local ok_spell, spell = pcall(vim.api.nvim_get_option_value, "spell", {
+    win = vim.api.nvim_get_current_win(),
+  })
+  if not ok_spell or not spell then
+    return false
+  end
+
+  local current = snapshot()
+  if not current then
+    return false
+  end
+  local spelling = spell_error_at_cursor(current)
+  local word = visual_spelling_text(mode)
+    or (spelling and spelling.word)
+    or word_at_or_after(current.line, current.column)
+  if not word or word == "" then
+    return false
+  end
+
+  local ok_suggestions, suggestions = pcall(
+    vim.fn.spellsuggest,
+    word,
+    spelling_suggestion_limit(),
+    spelling and spelling.kind == "caps"
+  )
+  if not ok_suggestions or type(suggestions) ~= "table" then
+    return false
+  end
+
+  if #suggestions == 0 then
+    return M.say("no spelling suggestions for " .. word)
+  end
+  local parts = { "Change " .. word .. " to" }
+  for index, suggestion in ipairs(suggestions) do
+    table.insert(parts, index .. ", " .. tostring(suggestion))
+  end
+  table.insert(parts, "Type a number and Enter, or q to cancel")
+  return M.say(table.concat(parts, ". "))
+end
+
+transient_output = transient_output_module.new({
+  begin_output = function(command, mode)
+    if command == "z=" and announce_spelling_suggestions(mode) then
+      local prompt = {}
+      state.semantic_native_prompt = prompt
+      vim.schedule(function()
+        if state.semantic_native_prompt == prompt
+          and not state.command_line_active
+        then
+          state.semantic_native_prompt = false
+        end
+      end)
+      return true
+    end
+    state.semantic_native_prompt = false
+    return begin_automatic_output_fallback()
+  end,
+})
 
 local function get_list_info(kind)
   local what = {
@@ -1201,10 +1300,14 @@ local function announce_command_line(event)
   remember_command_line(level)
   local command_type = event and (event.match or (event.data and event.data.cmdtype))
   command_type = command_type or vim.fn.getcmdtype()
-  -- z= and a few other native interfaces use the text-entry command line
-  -- after drawing output that is meaningful as a whole. Keep ordinary
-  -- terminal reading active for that prompt rather than reducing it to the
-  -- generic command-line announcement.
+  -- A semantically announced native prompt remains owned while the user
+  -- chooses an item. Other native text prompts retain the terminal-reading
+  -- fallback used for their visible output.
+  if command_type == "-" and state.semantic_native_prompt then
+    M.activate()
+    return
+  end
+  state.semantic_native_prompt = false
   if command_type == "-" and state.options.announce_messages then
     begin_automatic_output_fallback()
     return
@@ -1734,6 +1837,7 @@ local function invalidate_deferred_work()
   state.terminal_fallback = false
   state.terminal_command_line = false
   state.command_output_fallback = false
+  state.semantic_native_prompt = false
   state.automatic_reading = false
   state.discard_pending_messages = false
   state.message_poll_scheduled = false
@@ -1778,6 +1882,7 @@ function M.setup(options)
   state.terminal_fallback = false
   state.terminal_command_line = false
   state.command_output_fallback = false
+  state.semantic_native_prompt = false
   state.discard_pending_messages = false
   state.suppress_prompt_mode_return = nil
   state.last_spelling = nil
@@ -1870,6 +1975,9 @@ function M.setup(options)
     local transient_command_line = state.pending_command_line_announcements[level] ~= nil
     state.pending_command_line_announcements[level] = nil
     local command_type = event and (event.match or (event.data and event.data.cmdtype))
+    if command_type == "-" then
+      state.semantic_native_prompt = false
+    end
     local aborted = event and event.data and event.data.abort
     local command_executed = state.options.announce_messages
       and command_type == ":"

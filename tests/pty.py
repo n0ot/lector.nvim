@@ -24,7 +24,13 @@ APC = re.compile(
 
 
 class Nvim:
-    def __init__(self, runtime: Path, state_home: Path) -> None:
+    def __init__(
+        self,
+        runtime: Path,
+        state_home: Path,
+        *,
+        announce_spelling: bool = False,
+    ) -> None:
         master, slave = os.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
         env = os.environ.copy()
@@ -35,7 +41,8 @@ class Nvim:
         setup = (
             "lua require('lector').setup({"
             "announce_diagnostics=false,announce_floating_windows=false,"
-            "announce_spelling=false})"
+            f"announce_spelling={'true' if announce_spelling else 'false'}"
+            "})"
         )
         self.process = subprocess.Popen(
             [
@@ -105,6 +112,17 @@ class Nvim:
             if expected in self.events:
                 return
         raise AssertionError(f"missing event {expected!r}; events={self.events!r}")
+
+    def wait_for_event_prefix(self, expected: str, timeout: float = 3.0) -> str:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.pump(0.05)
+            for event in self.events:
+                if event.startswith(expected):
+                    return event
+        raise AssertionError(
+            f"missing event beginning with {expected!r}; events={self.events!r}"
+        )
 
     def wait_for_output(self, expected: bytes, timeout: float = 3.0) -> None:
         deadline = time.monotonic() + timeout
@@ -742,6 +760,41 @@ def main() -> int:
             session.wait_for_event("set;auto=0;cursor=0")
         finally:
             session.close()
+
+        spelling_session = Nvim(
+            runtime,
+            Path(directory) / "semantic-spelling",
+            announce_spelling=True,
+        )
+        try:
+            spelling_session.wait_for_event("unnamed buffer")
+            spelling_session.send(b":set spell spelllang=en_us spellsuggest=best,5\r")
+            spelling_session.send(b"ithis is a tesst\x1b")
+            spelling_session.clear()
+            spelling_session.send(b"z=")
+            spelling_session.wait_for_output(b'Change "tesst" to:')
+            spelling_session.wait_for_event_prefix("Change tesst to. 1, test")
+            spelling_session.pump(0.2)
+            if "set;auto=1;cursor=0" in spelling_session.events:
+                raise AssertionError(
+                    "semantic spelling suggestions enabled terminal automatic "
+                    f"reading: {spelling_session.events!r}"
+                )
+            spelling_session.send(b"q")
+
+            spelling_session.send(b":nnoremap Q z=\r")
+            spelling_session.clear()
+            spelling_session.send(b"Q")
+            spelling_session.wait_for_output(b'Change "tesst" to:')
+            spelling_session.wait_for_event_prefix("Change tesst to. 1, test")
+            if "set;auto=1;cursor=0" in spelling_session.events:
+                raise AssertionError(
+                    "mapped semantic spelling suggestions enabled terminal "
+                    f"automatic reading: {spelling_session.events!r}"
+                )
+            spelling_session.send(b"q")
+        finally:
+            spelling_session.close()
 
     print("lector.nvim PTY tests passed")
     return 0
