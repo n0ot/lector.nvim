@@ -17,8 +17,7 @@ end
 
 function M.normalize(text)
   text = tostring(text or "")
-  text = text:gsub("```[^\r\n]*[\r\n]+", ""):gsub("```", "")
-  text = text:gsub("`([^`\r\n]+)`", "%1")
+  -- Preserve punctuation; the consumer applies the user's speech settings.
   text = text:gsub("%c", " "):gsub("%s+", " ")
   text = vim.trim(text)
   if text == "" then

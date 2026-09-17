@@ -97,6 +97,19 @@ assert(lector.setup({
 }))
 assert(type(input_listener) == "function", "input listener was not installed")
 
+local punctuation_lines = { "anchor", "```", "`value`", "!@#$%^&*()[]{};:,.?/" }
+vim.api.nvim_buf_set_lines(0, 0, -1, false, punctuation_lines)
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.api.nvim_exec_autocmds("BufEnter", { buffer = 0, modeline = false })
+vim.wait(10)
+for row = 2, #punctuation_lines do
+  clear()
+  vim.api.nvim_win_set_cursor(0, { row, 0 })
+  vim.api.nvim_exec_autocmds("CursorMoved", { buffer = 0, modeline = false })
+  vim.wait(10)
+  equal({ punctuation_lines[row] }, semantic_text(), "cursor lines preserve punctuation")
+end
+
 vim.api.nvim_buf_set_name(0, "/private/tmp/lector-semantics.lua")
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { "one", "two", "three" })
 vim.api.nvim_win_set_cursor(0, { 1, 0 })

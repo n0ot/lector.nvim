@@ -103,7 +103,7 @@ vim.wait(10)
 
 clear()
 lector.say("```python\nprint(`value`)\n```")
-equal({ "print(value)" }, speech(), "Markdown presentation syntax is not spoken")
+equal({ "```python print(`value`) ```" }, speech(), "Markdown punctuation is sent to the consumer")
 
 local before = "This is Lector and Lec"
 local after = "This is Lector and Le"

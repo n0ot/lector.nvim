@@ -75,5 +75,9 @@ leaving or suspending the full-screen interface.
 Applications must remain useful when the consumer ignores every protocol
 message. Protocol output must not replace or remove visual information.
 
+Preserve punctuation in speech payloads, including Markdown delimiters. The
+consumer applies the user's punctuation level; producers should not strip
+symbols or replace them with spoken names.
+
 APC is used because these messages are private application-to-terminal control
 data. Version 1 does not assign meanings to OSC 200, 201, or 202.
