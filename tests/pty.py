@@ -150,6 +150,24 @@ class Nvim:
                 return
         raise AssertionError(f"missing terminal output {expected!r}")
 
+    def wait_for_selected_menu_item(
+        self, expected: bytes, timeout: float = 3.0
+    ) -> None:
+        pattern = re.compile(
+            rb"\x1b\[(?:[0-9:]+;)*7(?:;[0-9:]+)*m"
+            rb"(?:\x1b\[[0-9;:]*m)*"
+            + re.escape(expected)
+        )
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.pump(0.05)
+            if pattern.search(self.output):
+                return
+        raise AssertionError(
+            f"menu item {expected!r} was not visibly selected; "
+            f"output={bytes(self.output)!r}"
+        )
+
     def clear(self) -> None:
         self.output.clear()
         self.events.clear()
@@ -727,9 +745,14 @@ def main() -> int:
             session.wait_for_event("2 of 3")
 
             session.send(b":nnoremenu 10.10 PopUp.PTY <Cmd>let g:lector_pty_menu=1<CR>\r")
+            session.send(b":nnoremenu 32000.32000 PopUp.PTYLast <Nop>\r")
             session.clear()
             session.send(b"\x1b[<2;1;1M\x1b[<2;1;1m")
             session.wait_for_event("context menu")
+            session.clear()
+            session.send(b"\x1b[A")
+            session.wait_for_event_prefix("PTYLast, ")
+            session.wait_for_selected_menu_item(b"PTYLast")
             for _ in range(20):
                 session.send(b"\x1b[B")
                 if any(event.startswith("PTY, ") for event in session.events):

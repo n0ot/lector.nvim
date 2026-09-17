@@ -279,6 +279,7 @@ local context_menu = context_menu_module.new({
   activate = function() return M.activate() end,
   deactivate = function() return M.deactivate() end,
   enabled = function() return state.enabled end,
+  input = function(keys) return vim.api.nvim_input(keys) end,
   menus = menus,
   options = function() return state.options end,
   say = function(text) return M.say(text) end,

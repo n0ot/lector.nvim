@@ -48,6 +48,8 @@ local function menu_items(event_mode)
 end
 
 function M.new(dependencies)
+  local down = vim.api.nvim_replace_termcodes("<Down>", true, false, true)
+  local up = vim.api.nvim_replace_termcodes("<Up>", true, false, true)
   local enter_keys = {
     [vim.api.nvim_replace_termcodes("<CR>", true, false, true)] = true,
     [vim.api.nvim_replace_termcodes("<kEnter>", true, false, true)] = true,
@@ -59,10 +61,19 @@ function M.new(dependencies)
     deactivate = assert(dependencies.deactivate),
     enabled = assert(dependencies.enabled),
     enter_keys = enter_keys,
+    input = assert(dependencies.input),
     menus = assert(dependencies.menus),
     navigation_keys = {
-      [vim.api.nvim_replace_termcodes("<Down>", true, false, true)] = 1,
-      [vim.api.nvim_replace_termcodes("<Up>", true, false, true)] = -1,
+      [down] = 1,
+      [up] = -1,
+    },
+    navigation_input = {
+      [down] = "<Down>",
+      [up] = "<Up>",
+    },
+    opposite_navigation_key = {
+      [down] = up,
+      [up] = down,
     },
     options = assert(dependencies.options),
     popup = nil,
@@ -71,6 +82,26 @@ function M.new(dependencies)
     suppress_cursor = assert(dependencies.suppress_cursor),
     escape = vim.api.nvim_replace_termcodes("<Esc>", true, false, true),
   }, ContextMenu)
+end
+
+function ContextMenu:queue_navigation(popup, key, count)
+  if count < 1 then
+    return 0
+  end
+  local input_key = self.navigation_input[key]
+  local input = string.rep(input_key, count)
+  local ok, written = pcall(self.input, input)
+  if not ok or type(written) ~= "number" then
+    return 0
+  end
+  local queued = math.min(count, math.floor(written / #input_key))
+  if queued > 0 then
+    popup.forwarded_navigation = {
+      key = key,
+      remaining = queued,
+    }
+  end
+  return queued
 end
 
 function ContextMenu:reset()
@@ -121,21 +152,67 @@ function ContextMenu:handle_key(key)
   if not popup or popup.fallback then
     return false, false
   end
+  local forwarded = popup.forwarded_navigation
+  if forwarded and forwarded.key == key then
+    forwarded.remaining = forwarded.remaining - 1
+    if forwarded.remaining == 0 then
+      popup.forwarded_navigation = nil
+    end
+    return true, false
+  end
   local direction = self.navigation_keys[key]
   if direction and #popup.items > 0 then
+    local previous_index = popup.index
+    local consume = false
+    -- Neovim clamps its native selection at either end.  When Lector wraps,
+    -- walk the native selection back across the menu and keep those synthetic
+    -- arrows from producing intermediate announcements.
     if not popup.index then
-      popup.index = direction > 0 and 1 or #popup.items
+      if direction > 0 then
+        popup.index = 1
+      else
+        local queued = self:queue_navigation(
+          popup,
+          self.opposite_navigation_key[key],
+          #popup.items
+        )
+        if queued > 0 then
+          popup.index = queued
+          consume = true
+        end
+      end
+    elseif direction < 0 and popup.index == 1 then
+      local queued = self:queue_navigation(
+        popup,
+        self.opposite_navigation_key[key],
+        #popup.items - 1
+      )
+      popup.index = popup.index + queued
+      consume = queued > 0
+    elseif direction > 0 and popup.index == #popup.items then
+      local queued = self:queue_navigation(
+        popup,
+        self.opposite_navigation_key[key],
+        #popup.items - 1
+      )
+      popup.index = popup.index - queued
+      consume = queued > 0
     else
-      popup.index = ((popup.index - 1 + direction) % #popup.items) + 1
+      popup.index = popup.index + direction
     end
-    self.menus:publish({
-      id = menu_id,
-      name = "context menu",
-      count = #popup.items,
-      index = popup.index,
-      label = popup.items[popup.index].label
-        .. (popup.items[popup.index].submenu and ", submenu" or ""),
-    }, true)
+    if popup.index ~= previous_index then
+      self.menus:publish({
+        id = menu_id,
+        name = "context menu",
+        count = #popup.items,
+        index = popup.index,
+        label = popup.items[popup.index].label
+          .. (popup.items[popup.index].submenu and ", submenu" or ""),
+      }, true)
+    end
+    if consume then
+      return true, true
+    end
   end
   if self.submenu_keys[key]
     and popup.index

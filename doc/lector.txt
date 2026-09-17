@@ -152,7 +152,8 @@ announce_completions
         Announce native and registered completion menu selection.
 
 announce_popup_menus
-        Announce Neovim's native right-click context menu.
+        Announce Neovim's native right-click context menu. Wrapped arrow-key
+        navigation also moves the menu's visible selection.
 
 completion_include_kind
 completion_include_source

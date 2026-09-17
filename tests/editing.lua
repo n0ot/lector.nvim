@@ -342,6 +342,7 @@ vim.cmd("nnoremenu 10.30 PopUp.-99- <Nop>")
 clear()
 vim.api.nvim_exec_autocmds("MenuPopup", { pattern = "n", modeline = false })
 local popup_count = 0
+local last_popup_label
 for _, item in ipairs(vim.fn.menu_get("PopUp", "n")[1].submenus or {}) do
   local mapping = type(item.mappings) == "table" and item.mappings.n or nil
   if item.hidden ~= 1
@@ -349,6 +350,7 @@ for _, item in ipairs(vim.fn.menu_get("PopUp", "n")[1].submenus or {}) do
     and (type(item.submenus) == "table" or (mapping and mapping.enabled == 1))
   then
     popup_count = popup_count + 1
+    last_popup_label = item.name
   end
 end
 equal(
@@ -361,6 +363,33 @@ local down = vim.api.nvim_replace_termcodes("<Down>", true, false, true)
 local up = vim.api.nvim_replace_termcodes("<Up>", true, false, true)
 local control_n = vim.api.nvim_replace_termcodes("<C-N>", true, false, true)
 local enter = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+
+local original_nvim_input = vim.api.nvim_input
+local queued_menu_input
+vim.api.nvim_input = function(keys)
+  queued_menu_input = keys
+  return #keys
+end
+clear()
+equal(
+  "",
+  input_listener(up),
+  "an initial Up is replaced with native navigation to the last item"
+)
+equal(
+  { last_popup_label .. ", " .. popup_count .. " of " .. popup_count },
+  speech(),
+  "initial Up announces the last context-menu item"
+)
+equal(
+  string.rep("<Down>", popup_count),
+  queued_menu_input,
+  "initial Up moves the native menu selection to the last item"
+)
+vim.api.nvim_input = original_nvim_input
+
+clear()
+vim.api.nvim_exec_autocmds("MenuPopup", { pattern = "n", modeline = false })
 
 clear()
 input_listener(down)
@@ -385,6 +414,38 @@ equal(
   speech(),
   "Up announces the previous context-menu item"
 )
+
+for _ = 2, popup_count do
+  clear()
+  input_listener(down)
+end
+local forwarded_up
+vim.api.nvim_input = function(keys)
+  forwarded_up = keys
+  return #keys
+end
+clear()
+equal(
+  "",
+  input_listener(down),
+  "Down at the last item is replaced with native navigation to the first item"
+)
+equal(
+  { "First, 1 of " .. popup_count },
+  speech(),
+  "Down wraps the announced context-menu selection"
+)
+equal(
+  string.rep("<Up>", popup_count - 1),
+  forwarded_up,
+  "wrapped Down moves the native menu selection to the first item"
+)
+vim.api.nvim_input = original_nvim_input
+for _ = 1, popup_count - 1 do
+  clear()
+  input_listener(up)
+end
+equal({}, speech(), "forwarded native menu navigation is not re-announced")
 
 clear()
 input_listener(control_n)
