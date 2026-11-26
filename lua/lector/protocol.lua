@@ -6,6 +6,7 @@ local prefix = "Lector;A11y;1;"
 local maximum_speech_bytes = 2000
 local next_query_id = 0
 local pending_query
+local pending_channel
 local capabilities = {}
 
 local function hex_encode(text)
@@ -58,11 +59,18 @@ end
 
 function M.reset_capabilities()
   pending_query = nil
+  pending_channel = nil
   capabilities = {}
 end
 
 function M.query_capabilities()
   M.reset_capabilities()
+  -- nvim_ui_send broadcasts. One receiver's response cannot vouch for others.
+  local uis = vim.api.nvim_list_uis()
+  if #uis ~= 1 then
+    return false
+  end
+  pending_channel = uis[1].chan
   next_query_id = next_query_id + 1
   pending_query = tostring(next_query_id)
   if M.send("query;" .. pending_query) then
@@ -72,8 +80,8 @@ function M.query_capabilities()
   return false
 end
 
-function M.receive_capabilities(sequence)
-  if type(sequence) ~= "string" then
+function M.receive_capabilities(sequence, channel)
+  if type(sequence) ~= "string" or (channel and channel ~= pending_channel) then
     return false
   end
   -- Neovim passes the response without its terminating ST.

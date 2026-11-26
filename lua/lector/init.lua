@@ -2092,15 +2092,15 @@ function M.setup(options)
   vim.api.nvim_create_augroup(group_name, { clear = true })
   create_autocmd("TermResponse", function(event)
     local response = event.data and event.data.sequence or vim.v.termresponse
-    protocol.receive_capabilities(response)
+    protocol.receive_capabilities(response, event.data and event.data.chan)
   end)
-  create_autocmd({ "VimEnter", "UIEnter", "VimResume", "FocusGained" }, function()
+  create_autocmd({ "VimEnter", "UIEnter", "UILeave", "VimResume", "FocusGained" }, function()
     if state.enabled then
       protocol.query_capabilities()
       activate_semantic_policy(false, true)
     end
   end)
-  create_autocmd({ "UILeave", "FocusLost" }, protocol.reset_capabilities)
+  create_autocmd("FocusLost", protocol.reset_capabilities)
   create_autocmd("ShellCmdPost", function()
     if not state.command_output_fallback then
       M.activate()

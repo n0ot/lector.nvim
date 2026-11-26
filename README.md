@@ -16,7 +16,8 @@ return control to the screen reader.
 Blank lines use Lector's blank cue when the terminal advertises it, with
 “blank” as the spoken fallback. Horizontal cursor movement into a URL
 extmark identifies the link. The plugin checks for optional commands on
-startup, UI attach, resume, and focus gain.
+startup, UI changes, resume, and focus gain. With several attached Neovim
+UIs, it uses spoken messages so every terminal can understand them.
 
 ## Requirements
 
