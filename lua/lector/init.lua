@@ -2255,10 +2255,12 @@ function M.setup(options)
   pcall(vim.api.nvim_create_user_command, "LectorAccessibilityEnable", function()
     state.message_history = read_message_history()
     state.enabled = true
+    protocol.query_capabilities()
     M.activate()
   end, { force = true })
   pcall(vim.api.nvim_create_user_command, "LectorAccessibilityDisable", function()
     state.enabled = false
+    protocol.reset_capabilities()
     invalidate_deferred_work()
     close_all_menus()
     M.deactivate()
@@ -2297,6 +2299,7 @@ function M.teardown()
   if not owns_registrations then
     return
   end
+  protocol.reset_capabilities()
   restore_ui_functions()
   detach_input_listener()
   pcall(vim.api.nvim_del_augroup_by_name, group_name)

@@ -223,6 +223,17 @@ def check_capability_negotiation(runtime: Path, state_home: Path) -> None:
         session.send(b"l")
         session.wait_for_event("i")
         assert b"say-link;" not in session.output, "link cue repeated inside one range"
+        session.send(b":LectorAccessibilityDisable\r")
+        session.clear()
+        session.send(b"\x1b[O\x1b[I")
+        assert not query.search(session.output), "disabled plugin queried on focus"
+        session.send(b":LectorAccessibilityEnable\r")
+        assert query.search(session.output), "enable did not negotiate again"
+        session.send(b"gg")
+        session.clear()
+        session.send(b"j")
+        session.wait_for_event("blank")
+        assert b"cue;blank;" not in session.output, "enable reused a stale capability"
     finally:
         session.close()
 
