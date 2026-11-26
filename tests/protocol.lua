@@ -67,6 +67,14 @@ uis[2] = nil
 assert(protocol.query_capabilities())
 equal(false, protocol.receive_capabilities(reply, 8))
 assert(protocol.receive_capabilities(reply:gsub("capabilities;1;", "capabilities;2;"), 8))
+assert(protocol.line("x y", 0, { { 2, 3 } }))
+equal("\27_Lector;A11y;1;line;indent=0;782079\27\\", sent)
+assert(protocol.query_capabilities())
+assert(protocol.receive_capabilities("\27_Lector;A11y;1;capabilities;3;inline=link", 8))
+assert(protocol.say("a\té end", { { 2, 4 }, { 5, 8 } }))
+equal("\27_Lector;A11y;1;say;links=2-4,5-8;6120c3a920656e64\27\\", sent)
+assert(protocol.line("a é end", 2, { { 2, 4 }, { 5, 8 } }))
+equal("\27_Lector;A11y;1;line;indent=2;links=2-4,5-8;6120c3a920656e64\27\\", sent)
 vim.api.nvim_list_uis = original_list_uis
 vim.api.nvim_ui_send = original_ui_send
 print("lector.nvim protocol tests passed")
