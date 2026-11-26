@@ -119,26 +119,27 @@ local menus = menus_module.new({
   say = function(text) return M.say(text) end,
 })
 
-local function send_speech(text, entering_link)
+local function send_speech(text, entering_link, links)
   if not state.active then
     return false
   end
-  local sent = (entering_link and protocol.say_link or protocol.say)(text)
+  local sent = (entering_link and protocol.say_link or protocol.say)(text, links)
   if sent then
     state.speech_generation = state.speech_generation + 1
   end
   return sent
 end
 
-local function send_line(text, indentation)
+local function send_line(current)
   if not state.active then
     return false
   end
   local sent
-  if text:match("^%s*$") then
-    sent = protocol.blank_line(indentation)
+  if current.line:match("^%s*$") then
+    sent = protocol.blank_line(current.indentation)
   else
-    sent = protocol.line(text, indentation)
+    local links = protocol.supports_inline_links() and editor.line_links(current) or nil
+    sent = protocol.line(current.line, current.indentation, links)
   end
   if sent then
     state.speech_generation = state.speech_generation + 1
@@ -247,11 +248,11 @@ local function native_text_prompt_active()
   return ok and command_type == "-"
 end
 
-function M.say(text)
+function M.say(text, links)
   if not M.activate() then
     return false
   end
-  return send_speech(text)
+  return send_speech(text, false, links)
 end
 
 local function lifecycle_is_current(generation)
@@ -1148,7 +1149,7 @@ local function announce_cursor(event)
   then
     if previous.row ~= current.row then
       if not announce_list_window_entry(current) then
-        send_line(current.line, current.indentation)
+        send_line(current)
       end
       announce_closed_fold(current)
     elseif previous.column ~= current.column then

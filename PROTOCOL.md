@@ -65,7 +65,7 @@ cursor addressing, and routine screen redraws must not end the session.
 
 A producer can send `query;<id>` using the version 1 APC envelope. The ID is
 1 to 32 ASCII digits. A supporting consumer returns
-`capabilities;<id>;cue=blank;link=1` in the same envelope to the querying view.
+`capabilities;<id>;cue=blank;link=1;inline=link` in the same envelope to the querying view.
 The producer matches the ID to its current request and ignores unrecognized
 capability keys. The `cue` value is a comma-separated list of cue names.
 
@@ -74,6 +74,14 @@ capability keys. The `cue` value is a comma-separated list of cue names.
   `cue;blank;indent=<0..65535>;<hex-encoded UTF-8>` also carries line indentation.
 - `say-link;<hex-encoded UTF-8>` reads link text with a link indication at its
   audible onset. The consumer uses the spoken “link” label where necessary.
+
+The `inline=link` capability also allows `say;links=<ranges>;<hex>` and
+`line;indent=<columns>;links=<ranges>;<hex>`. Each range is a half-open UTF-8
+byte span written as `start-end`. Send up to 32 nonempty spans in ascending
+order, separated by commas. Spans may touch and must not overlap. The consumer
+indicates each link at its first spoken text and applies spoken feedback
+when tones are unavailable. Producers use ordinary `say` and `line` with
+receivers that omit this capability.
 
 Producers use optional commands only after the corresponding capability is
 advertised. A missing reply leaves the original `say` and `line` behavior

@@ -108,6 +108,36 @@ function M.entered_url(previous, current)
   return false
 end
 
+function M.line_links(current)
+  local row = current.row - 1
+  local width = #current.line
+  local marks = vim.api.nvim_buf_get_extmarks(current.buffer, -1, { row, 0 }, { row, width }, {
+    overlap = true, details = true,
+  })
+  local links = {}
+  for _, mark in ipairs(marks) do
+    local start_row, column, details = mark[2], mark[3], mark[4]
+    if details.url and details.end_row and details.end_col and not details.invalid then
+      local first = start_row < row and 0 or column
+      local last = details.end_row > row and width or math.min(details.end_col, width)
+      if details.end_row >= row and first < last then
+        links[#links + 1] = { first, last }
+      end
+    end
+  end
+  table.sort(links, function(a, b) return a[1] < b[1] end)
+  local merged = {}
+  for _, link in ipairs(links) do
+    local previous = merged[#merged]
+    if previous and previous[2] > link[1] then
+      previous[2] = math.max(previous[2], link[2])
+    else
+      merged[#merged + 1] = link
+    end
+  end
+  return merged
+end
+
 function M.spoken_character(character)
   if character == "" then
     return "blank"

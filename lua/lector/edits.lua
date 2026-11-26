@@ -192,7 +192,7 @@ function Edits:schedule_destination(buffer, destination_kind, previous)
       and previous.buffer == current.buffer
       and (previous.row ~= current.row or previous.line_count ~= current.line_count)
     if destination_kind == "line" or moved_lines then
-      self.send_line(current.line, current.indentation)
+      self.send_line(current)
     elseif destination_kind == "word" then
       local word = self.word_at_or_after(current.line, current.column)
       self.send_speech(word or self.character_at_cursor(current))
