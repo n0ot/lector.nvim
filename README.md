@@ -20,6 +20,9 @@ use the URL ranges marked by Neovim or its plugins. The plugin checks for option
 startup, UI changes, resume, and focus gain. With several attached Neovim
 UIs, it uses spoken messages so every terminal can understand them.
 
+Plugin authors can pass ordered UTF-8 byte spans to `require("lector").say`.
+For example, `require("lector").say("see here", {{4, 8}})` marks “here” as a link.
+
 ## Requirements
 
 - Neovim 0.12 or newer, with API level 14 and `nvim_ui_send()`

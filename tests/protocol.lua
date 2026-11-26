@@ -75,6 +75,9 @@ assert(protocol.say("a\té end", { { 2, 4 }, { 5, 8 } }))
 equal("\27_Lector;A11y;1;say;links=2-4,5-8;6120c3a920656e64\27\\", sent)
 assert(protocol.line("a é end", 2, { { 2, 4 }, { 5, 8 } }))
 equal("\27_Lector;A11y;1;line;indent=2;links=2-4,5-8;6120c3a920656e64\27\\", sent)
+local wide = "  a" .. string.rep(" ", 2000) .. "end  "
+assert(protocol.line(wide, 2, { { 2, 3 }, { 2003, 2006 } }))
+equal("\27_Lector;A11y;1;line;indent=2;links=0-1,2-5;6120656e64\27\\", sent)
 vim.api.nvim_list_uis = original_list_uis
 vim.api.nvim_ui_send = original_ui_send
 print("lector.nvim protocol tests passed")

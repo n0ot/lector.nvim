@@ -119,11 +119,11 @@ local menus = menus_module.new({
   say = function(text) return M.say(text) end,
 })
 
-local function send_speech(text, entering_link)
+local function send_speech(text, entering_link, links)
   if not state.active then
     return false
   end
-  local sent = (entering_link and protocol.say_link or protocol.say)(text)
+  local sent = (entering_link and protocol.say_link or protocol.say)(text, links)
   if sent then
     state.speech_generation = state.speech_generation + 1
   end
@@ -248,11 +248,11 @@ local function native_text_prompt_active()
   return ok and command_type == "-"
 end
 
-function M.say(text)
+function M.say(text, links)
   if not M.activate() then
     return false
   end
-  return send_speech(text)
+  return send_speech(text, false, links)
 end
 
 local function lifecycle_is_current(generation)
