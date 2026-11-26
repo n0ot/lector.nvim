@@ -13,6 +13,11 @@ auto-reading and cursor-tracking behavior. Terminal buffers, external prompts,
 terminal reset, alternate-screen exit, and an explicit protocol `end` also
 return control to the screen reader.
 
+Blank lines use Lector's blank cue when the terminal advertises it, with
+“blank” as the spoken fallback. Horizontal cursor movement into a URL
+extmark identifies the link. The plugin checks for optional commands on
+startup, UI attach, resume, and focus gain.
+
 ## Requirements
 
 - Neovim 0.12 or newer, with API level 14 and `nvim_ui_send()`

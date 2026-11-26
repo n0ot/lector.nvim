@@ -187,6 +187,46 @@ class Nvim:
         os.close(self.master)
 
 
+def check_capability_negotiation(runtime: Path, state_home: Path) -> None:
+    session = Nvim(runtime, state_home)
+    query = re.compile(rb"\x1b_Lector;A11y;1;query;(\d+)\x1b\\")
+    try:
+        session.wait_for_event("unnamed buffer")
+        startup_ids = query.findall(session.output)
+        assert startup_ids, "no capability query at startup"
+        session.send(b":call setline(1, ['start', '', 'tail'])\rgg")
+        session.clear()
+        session.send(b"j")
+        session.wait_for_event("blank")
+        assert not query.search(session.output), "cursor movement retried negotiation"
+
+        session.send(b"k\x1b[O")
+        session.clear()
+        session.send(b"\x1b[I")
+        focus_ids = query.findall(session.output)
+        assert focus_ids and focus_ids[-1] not in startup_ids, "focus did not query again"
+        session.wait_for_event("set;auto=0;cursor=0")
+        session.send(b"\x1b_Lector;A11y;1;capabilities;" + focus_ids[-1] + b";cue=blank;link=1\x1b\\")
+        session.clear()
+        session.send(b"j")
+        session.wait_for_output(b"\x1b_Lector;A11y;1;cue;blank;indent=0;626c616e6b\x1b\\")
+        assert "blank" not in session.events, "negotiated cue duplicated the legacy fallback"
+
+        session.send(
+            b":lua local ns=vim.api.nvim_create_namespace('fixture'); "
+            b"vim.api.nvim_buf_set_extmark(0,ns,2,1,{end_col=3,url='https://example.invalid'})\rG0"
+        )
+        session.clear()
+        session.send(b"l")
+        session.wait_for_output(b"\x1b_Lector;A11y;1;say-link;61\x1b\\")
+        session.clear()
+        session.send(b"l")
+        session.wait_for_event("i")
+        assert b"say-link;" not in session.output, "link cue repeated inside one range"
+    finally:
+        session.close()
+
+
 def main() -> int:
     if not shutil.which(NVIM):
         print("skipped: nvim is not installed")
@@ -194,6 +234,7 @@ def main() -> int:
 
     runtime = Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory(prefix="lector-nvim-pty-") as directory:
+        check_capability_negotiation(runtime, Path(directory))
         session = Nvim(runtime, Path(directory))
         try:
             session.wait_for_event("unnamed buffer")
