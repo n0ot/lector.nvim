@@ -47,5 +47,26 @@ equal(false, protocol.line(" \n", 0))
 equal(string.rep("a", 2000), protocol.normalize(string.rep("a", 2001)))
 equal(string.rep("a", 1999), protocol.normalize(string.rep("a", 1999) .. "é"))
 
+local original_list_uis = vim.api.nvim_list_uis
+local uis = { { chan = 8 } }
+vim.api.nvim_list_uis = function() return uis end
+assert(protocol.query_capabilities())
+equal("\27_Lector;A11y;1;query;1\27\\", sent)
+local reply = "\27_Lector;A11y;1;capabilities;1;cue=blank;link=1"
+equal(false, protocol.receive_capabilities(reply, 9))
+assert(protocol.receive_capabilities(reply, 8))
+assert(protocol.blank_line(0))
+equal("\27_Lector;A11y;1;cue;blank;indent=0;626c616e6b\27\\", sent)
+
+uis[2] = { chan = 9 }
+equal(false, protocol.query_capabilities())
+equal(false, protocol.receive_capabilities(reply, 8))
+assert(protocol.blank_line(0))
+equal("\27_Lector;A11y;1;line;indent=0;626c616e6b\27\\", sent)
+uis[2] = nil
+assert(protocol.query_capabilities())
+equal(false, protocol.receive_capabilities(reply, 8))
+assert(protocol.receive_capabilities(reply:gsub("capabilities;1;", "capabilities;2;"), 8))
+vim.api.nvim_list_uis = original_list_uis
 vim.api.nvim_ui_send = original_ui_send
 print("lector.nvim protocol tests passed")

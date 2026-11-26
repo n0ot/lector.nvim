@@ -2,7 +2,7 @@
 
 Full-screen terminal applications know semantic facts which a terminal screen
 reader cannot reliably infer from cursor movement and changed cells. This
-one-way protocol lets an application temporarily suppress selected automatic
+protocol lets an application temporarily suppress selected automatic
 heuristics and provide semantic speech without identifying itself to the
 screen reader.
 
@@ -61,9 +61,25 @@ A compatible terminal screen reader should:
 Ordinary drawing operations are not session resets. SGR reset, erase display,
 cursor addressing, and routine screen redraws must not end the session.
 
-The protocol is intentionally one-way in version 1. It has no authentication,
-heartbeat, acknowledgement, or capability query. Applications should re-send
-their complete `set` policy when they regain or reinitialize the terminal.
+### Optional commands and capability discovery
+
+A producer can send `query;<id>` using the version 1 APC envelope. The ID is
+1 to 32 ASCII digits. A supporting consumer returns
+`capabilities;<id>;cue=blank;link=1` in the same envelope to the querying view.
+The producer matches the ID to its current request and ignores unrecognized
+capability keys. The `cue` value is a comma-separated list of cue names.
+
+- `cue;blank;<hex-encoded UTF-8>` requests the blank tone and supplies
+  spoken fallback. An empty fallback requests silence if the tone is unavailable.
+  `cue;blank;indent=<0..65535>;<hex-encoded UTF-8>` also carries line indentation.
+- `say-link;<hex-encoded UTF-8>` reads link text with a link indication at its
+  audible onset. The consumer uses the spoken “link” label where necessary.
+
+Producers use optional commands only after the corresponding capability is
+advertised. A missing reply leaves the original `say` and `line` behavior
+available. Capability replies describe command support; the consumer applies
+the user's current tone preference and speech host support to each request.
+The protocol has no authentication or heartbeat.
 
 ## Producer guidance
 

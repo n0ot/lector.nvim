@@ -25,7 +25,6 @@ local normalize_speech = protocol.normalize
 local snapshot = editor.snapshot
 local spoken_character = editor.spoken_character
 local spoken_deletion = editor.spoken_deletion
-local spoken_line = editor.spoken_line
 local visual_selection_summary = editor.visual_selection_summary
 local word_at = editor.word_at
 local word_at_or_after = editor.word_at_or_after
@@ -120,11 +119,11 @@ local menus = menus_module.new({
   say = function(text) return M.say(text) end,
 })
 
-local function send_speech(text)
+local function send_speech(text, entering_link)
   if not state.active then
     return false
   end
-  local sent = protocol.say(text)
+  local sent = (entering_link and protocol.say_link or protocol.say)(text)
   if sent then
     state.speech_generation = state.speech_generation + 1
   end
@@ -135,7 +134,12 @@ local function send_line(text, indentation)
   if not state.active then
     return false
   end
-  local sent = protocol.line(text, indentation)
+  local sent
+  if text:match("^%s*$") then
+    sent = protocol.blank_line(indentation)
+  else
+    sent = protocol.line(text, indentation)
+  end
   if sent then
     state.speech_generation = state.speech_generation + 1
   end
@@ -165,7 +169,7 @@ local function editor_owns_current_context(buftype)
   })
 end
 
-local function activate_semantic_policy(force)
+local function activate_semantic_policy(force, reassert)
   if not state.enabled or next(state.ui_transactions) ~= nil then
     return false
   end
@@ -175,7 +179,7 @@ local function activate_semantic_policy(force)
   })
   if ok and buftype == "terminal" then
     if state.terminal_command_line then
-      if state.active and not state.automatic_reading then
+      if state.active and not state.automatic_reading and not reassert then
         return true
       end
       local sent = protocol.send("set;auto=0;cursor=0")
@@ -195,7 +199,7 @@ local function activate_semantic_policy(force)
     M.deactivate()
     return false
   end
-  if state.active and not state.automatic_reading then
+  if state.active and not state.automatic_reading and not reassert then
     return true
   end
   local sent = protocol.send("set;auto=0;cursor=0")
@@ -484,7 +488,6 @@ edits = edits_module.new({
   send_speech = send_speech,
   snapshot = snapshot,
   spoken_deletion = spoken_deletion,
-  spoken_line = spoken_line,
   text_windows = function() return state.text_windows end,
   word_at_or_after = word_at_or_after,
 })
@@ -1145,16 +1148,17 @@ local function announce_cursor(event)
   then
     if previous.row ~= current.row then
       if not announce_list_window_entry(current) then
-        send_line(spoken_line(current), current.indentation)
+        send_line(current.line, current.indentation)
       end
       announce_closed_fold(current)
     elseif previous.column ~= current.column then
       if not new_spelling then
         local distance = character_distance(current.line, current.column, previous.column)
+        local entering_link = editor.entered_url(previous, current)
         if distance > 1 and current.word and current.word_start ~= previous.word_start then
-          send_speech(current.word)
+          send_speech(current.word, entering_link)
         else
-          send_speech(character_at_cursor(current))
+          send_speech(character_at_cursor(current), entering_link)
         end
       end
     end
@@ -2086,9 +2090,17 @@ function M.setup(options)
   state.cursor_announcement_generation = state.cursor_announcement_generation + 1
 
   vim.api.nvim_create_augroup(group_name, { clear = true })
-  create_autocmd({ "VimEnter", "UIEnter", "VimResume", "FocusGained" }, function()
-    M.activate()
+  create_autocmd("TermResponse", function(event)
+    local response = event.data and event.data.sequence or vim.v.termresponse
+    protocol.receive_capabilities(response, event.data and event.data.chan)
   end)
+  create_autocmd({ "VimEnter", "UIEnter", "UILeave", "VimResume", "FocusGained" }, function()
+    if state.enabled then
+      protocol.query_capabilities()
+      activate_semantic_policy(false, true)
+    end
+  end)
+  create_autocmd("FocusLost", protocol.reset_capabilities)
   create_autocmd("ShellCmdPost", function()
     if not state.command_output_fallback then
       M.activate()
@@ -2243,10 +2255,12 @@ function M.setup(options)
   pcall(vim.api.nvim_create_user_command, "LectorAccessibilityEnable", function()
     state.message_history = read_message_history()
     state.enabled = true
+    protocol.query_capabilities()
     M.activate()
   end, { force = true })
   pcall(vim.api.nvim_create_user_command, "LectorAccessibilityDisable", function()
     state.enabled = false
+    protocol.reset_capabilities()
     invalidate_deferred_work()
     close_all_menus()
     M.deactivate()
@@ -2263,8 +2277,12 @@ function M.setup(options)
   end, { force = true })
 
   local lifecycle_generation = state.lifecycle_generation
+  local already_started = vim.v.vim_did_enter == 1
   vim.schedule(function()
     if lifecycle_is_current(lifecycle_generation) then
+      if already_started then
+        protocol.query_capabilities()
+      end
       M.activate()
       announce_buffer()
     end
@@ -2281,6 +2299,7 @@ function M.teardown()
   if not owns_registrations then
     return
   end
+  protocol.reset_capabilities()
   restore_ui_functions()
   detach_input_listener()
   pcall(vim.api.nvim_del_augroup_by_name, group_name)

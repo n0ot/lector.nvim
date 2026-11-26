@@ -86,8 +86,26 @@ function M.snapshot()
   }
 end
 
-function M.spoken_line(current)
-  return current.line:match("^%s*$") and "blank" or current.line
+-- URL extmarks provide an actual link range, independent of syntax names.
+function M.entered_url(previous, current)
+  local position = { current.row - 1, current.column }
+  local marks = vim.api.nvim_buf_get_extmarks(current.buffer, -1, position, position, {
+    overlap = true, details = true,
+  })
+  for _, mark in ipairs(marks) do
+    local row, column, details = mark[2], mark[3], mark[4]
+    local function contains(snapshot)
+      local line = snapshot.row - 1
+      return (line > row or (line == row and snapshot.column >= column))
+        and (line < details.end_row or (line == details.end_row and snapshot.column < details.end_col))
+    end
+    if details.url and details.end_row and details.end_col and not details.invalid
+      and contains(current) and not contains(previous)
+    then
+      return true
+    end
+  end
+  return false
 end
 
 function M.spoken_character(character)

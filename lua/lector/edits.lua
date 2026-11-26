@@ -75,7 +75,6 @@ function M.new(dependencies)
     send_speech = assert(dependencies.send_speech),
     snapshot = assert(dependencies.snapshot),
     spoken_deletion = assert(dependencies.spoken_deletion),
-    spoken_line = assert(dependencies.spoken_line),
     structured_edit_ticks = {},
     suppress_edit_cursor = false,
     suppress_visual_delete_mode_return = nil,
@@ -193,7 +192,7 @@ function Edits:schedule_destination(buffer, destination_kind, previous)
       and previous.buffer == current.buffer
       and (previous.row ~= current.row or previous.line_count ~= current.line_count)
     if destination_kind == "line" or moved_lines then
-      self.send_line(self.spoken_line(current), current.indentation)
+      self.send_line(current.line, current.indentation)
     elseif destination_kind == "word" then
       local word = self.word_at_or_after(current.line, current.column)
       self.send_speech(word or self.character_at_cursor(current))
